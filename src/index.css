@@ -112,11 +112,13 @@
   }
 
   .status-present {
-    @apply text-success bg-success-muted;
+    color: hsl(var(--success));
+    background-color: hsl(var(--success-muted));
   }
 
   .status-absent {
-    @apply text-absent bg-absent-muted;
+    color: hsl(var(--absent));
+    background-color: hsl(var(--absent-muted));
   }
 
   .glow-primary {
