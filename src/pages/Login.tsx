@@ -19,6 +19,13 @@ export default function Login() {
         setLoading(true);
 
         try {
+            // Aggressively attempt to clear any stuck existing sessions to prevent 401s
+            try {
+                await account.deleteSession("current");
+            } catch (e) {
+                // Ignore if no session exists or network error
+            }
+
             const session = await account.createEmailPasswordSession(email, password);
 
             const dbId = import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db";
