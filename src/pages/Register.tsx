@@ -29,7 +29,10 @@ export default function Register() {
             // 1. Create Appwrite Auth Account
             const userAccount = await account.create(ID.unique(), email, password, name);
 
-            // 2. Create web_users pending document
+            // 2. Log them in briefly so they exit "guest" mode and gain "users" role
+            await account.createEmailPasswordSession(email, password);
+
+            // 3. Create web_users pending document now that they have permission
             const dbId = import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db";
             await databases.createDocument(dbId, "web_users", ID.unique(), {
                 userId: userAccount.$id,
@@ -37,6 +40,9 @@ export default function Register() {
                 status: "pending",
                 role: "user"
             });
+            
+            // 4. Log them back out immediately so they are forced to wait for approval
+            await account.deleteSession("current");
 
             toast.success("Registration successful! Please wait for admin approval before logging in.");
             navigate("/login");
