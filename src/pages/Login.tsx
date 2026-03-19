@@ -126,6 +126,13 @@ export default function Login() {
                     <Button type="submit" className="w-full font-semibold shadow-lg shadow-primary/25 transition-all hover:scale-[1.02]" disabled={loading}>
                         {loading ? "Signing in..." : "Sign In"}
                     </Button>
+
+                    <p className="text-center text-sm text-muted-foreground">
+                        Don't have an account?{" "}
+                        <Button variant="link" className="p-0 h-auto font-semibold" onClick={() => navigate("/register")} type="button">
+                            Request Access
+                        </Button>
+                    </p>
                 </form>
             </div>
         </div>
