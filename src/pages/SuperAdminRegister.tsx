@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { account } from "@/lib/appwrite";
+import { account, databases } from "@/lib/appwrite";
 import { ID } from "appwrite";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,10 +16,24 @@ export default function SuperAdminRegister() {
 
     const handleRegister = async (e: React.FormEvent) => {
         e.preventDefault();
+
+        if (email.toLowerCase() !== "pratikgangurde35@gmail.com") {
+            toast.error("You are not authorized to register as super admin.");
+            return;
+        }
+
         setLoading(true);
 
         try {
-            await account.create(ID.unique(), email, password);
+            const userAccount = await account.create(ID.unique(), email, password);
+
+            const dbId = import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db";
+            await databases.createDocument(dbId, "web_users", ID.unique(), {
+                userId: userAccount.$id,
+                email: email.toLowerCase(),
+                status: "approved",
+                role: "superadmin"
+            });
 
             toast.success("Registration successful! You can now log in.");
             navigate("/login");

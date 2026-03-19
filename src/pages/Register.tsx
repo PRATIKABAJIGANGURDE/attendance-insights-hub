@@ -1,74 +1,47 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { account, databases } from "@/lib/appwrite";
-import { Query } from "appwrite";
+import { ID } from "appwrite";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { LogIn } from "lucide-react";
+import { UserPlus } from "lucide-react";
 
-export default function Login() {
+export default function Register() {
     const navigate = useNavigate();
+    const [name, setName] = useState("");
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [loading, setLoading] = useState(false);
 
-    const handleLogin = async (e: React.FormEvent) => {
+    const handleRegister = async (e: React.FormEvent) => {
         e.preventDefault();
+        
+        if (!email.toLowerCase().endsWith("@atharvacoe.ac.in")) {
+            toast.error("Only @atharvacoe.ac.in emails are allowed to register.");
+            return;
+        }
+
         setLoading(true);
 
         try {
-            const session = await account.createEmailPasswordSession(email, password);
+            // 1. Create Appwrite Auth Account
+            const userAccount = await account.create(ID.unique(), email, password, name);
 
+            // 2. Create web_users pending document
             const dbId = import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db";
-            const userDocs = await databases.listDocuments(dbId, "web_users", [
-                Query.equal("userId", session.userId)
-            ]);
+            await databases.createDocument(dbId, "web_users", ID.unique(), {
+                userId: userAccount.$id,
+                email: email.toLowerCase(),
+                status: "pending",
+                role: "user"
+            });
 
-            if (userDocs.documents.length > 0) {
-                const doc = userDocs.documents[0];
-                if (doc.status === "pending") {
-                    await account.deleteSession("current");
-                    toast.error("Your account is pending superadmin approval.");
-                    setLoading(false);
-                    return;
-                } else if (doc.status === "rejected") {
-                    await account.deleteSession("current");
-                    toast.error("Your account request was rejected.");
-                    setLoading(false);
-                    return;
-                }
-                
-                sessionStorage.setItem("user_role", doc.role);
-                if (doc.linkedMemberId) {
-                    sessionStorage.setItem("linked_member_id", doc.linkedMemberId);
-                }
-
-                if (doc.role === "user") {
-                    if (!doc.linkedMemberId) {
-                        await account.deleteSession("current");
-                        toast.error("Account approved but no physical profile is linked yet. Contact Admin.");
-                        setLoading(false);
-                        return;
-                    }
-                    toast.success("Logged in successfully!");
-                    navigate(`/members/${doc.linkedMemberId}`);
-                    return;
-                }
-            } else if (email.toLowerCase() !== "pratikgangurde35@gmail.com") {
-                await account.deleteSession("current");
-                toast.error("Unrecognized account. Please register first.");
-                setLoading(false);
-                return;
-            } else {
-                sessionStorage.setItem("user_role", "superadmin");
-            }
-
-            toast.success("Logged in successfully!");
-            navigate("/");
+            toast.success("Registration successful! Please wait for admin approval before logging in.");
+            navigate("/login");
         } catch (error: any) {
-            toast.error(error.message || "Failed to log in.");
+            toast.error(error.message || "Failed to register.");
         } finally {
             setLoading(false);
         }
@@ -84,19 +57,31 @@ export default function Login() {
             <div className="w-full max-w-md space-y-8 glass-card p-8 rounded-2xl relative z-10 border border-border/50 shadow-2xl">
                 <div className="text-center space-y-2">
                     <div className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 text-primary mb-2">
-                        <LogIn className="h-6 w-6" />
+                        <UserPlus className="h-6 w-6" />
                     </div>
-                    <h2 className="text-3xl font-bold tracking-tight text-foreground">Welcome Back</h2>
-                    <p className="text-sm text-muted-foreground">Sign in to the Attendance Insights Hub.</p>
+                    <h2 className="text-3xl font-bold tracking-tight text-foreground">Create Account</h2>
+                    <p className="text-sm text-muted-foreground">Register using your @atharvacoe.ac.in email.</p>
                 </div>
 
-                <form onSubmit={handleLogin} className="space-y-6 mt-8">
+                <form onSubmit={handleRegister} className="space-y-6 mt-8">
+                    <div className="space-y-2">
+                        <Label htmlFor="name">Full Name</Label>
+                        <Input
+                            id="name"
+                            type="text"
+                            placeholder="John Doe"
+                            value={name}
+                            onChange={(e) => setName(e.target.value)}
+                            required
+                            className="bg-surface-1 border-border/50 focus:border-primary/50 transition-colors"
+                        />
+                    </div>
                     <div className="space-y-2">
                         <Label htmlFor="email">Email</Label>
                         <Input
                             id="email"
                             type="email"
-                            placeholder="admin@example.com"
+                            placeholder="student@atharvacoe.ac.in"
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
                             required
@@ -112,13 +97,21 @@ export default function Login() {
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
                             required
+                            minLength={8}
                             className="bg-surface-1 border-border/50 focus:border-primary/50 transition-colors"
                         />
                     </div>
 
                     <Button type="submit" className="w-full font-semibold shadow-lg shadow-primary/25 transition-all hover:scale-[1.02]" disabled={loading}>
-                        {loading ? "Signing in..." : "Sign In"}
+                        {loading ? "Registering..." : "Sign Up"}
                     </Button>
+
+                    <p className="text-center text-sm text-muted-foreground">
+                        Already have an account?{" "}
+                        <Button variant="link" className="p-0 h-auto font-semibold" onClick={() => navigate("/login")} type="button">
+                            Sign In
+                        </Button>
+                    </p>
                 </form>
             </div>
         </div>
