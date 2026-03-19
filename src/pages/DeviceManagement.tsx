@@ -1,32 +1,224 @@
 import { motion } from "framer-motion";
 import DashboardLayout from "@/components/DashboardLayout";
 import { mockDevice } from "@/data/mockData";
-import { Cpu, Wifi, Clock, Fingerprint, RefreshCw, Plus, RotateCcw } from "lucide-react";
+import { Cpu, Wifi, Clock, Fingerprint, RefreshCw, Plus, RotateCcw, UploadCloud, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
+import { databases, storage } from "@/lib/appwrite";
+import { ID } from "appwrite";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 export default function DeviceManagement() {
+  const navigate = useNavigate();
   const [syncing, setSyncing] = useState(false);
+  const [adminSetupOpen, setAdminSetupOpen] = useState(false);
+  const [setupStep, setSetupStep] = useState<"polling" | "success" | "error">("polling");
+  const [setupStatusMsg, setSetupStatusMsg] = useState("");
+  const [activeSetupCmdId, setActiveSetupCmdId] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleSync = () => {
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (adminSetupOpen && setupStep === "polling" && activeSetupCmdId) {
+      interval = setInterval(async () => {
+        try {
+          const doc = await databases.getDocument(
+            import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db",
+            import.meta.env.VITE_APPWRITE_COLLECTION_ID_COMMANDS || "device_commands",
+            activeSetupCmdId
+          );
+          if (doc.status === "completed") {
+            setSetupStep("success");
+            clearInterval(interval);
+          } else if (doc.status === "failed" || doc.status === "timeout" || doc.status === "unauthorized") {
+            setSetupStep("error");
+            setSetupStatusMsg(doc.status);
+            clearInterval(interval);
+          }
+        } catch (e) { /* ignore */ }
+      }, 2000);
+    }
+    return () => clearInterval(interval);
+  }, [adminSetupOpen, setupStep, activeSetupCmdId]);
+
+  const [deviceData, setDeviceData] = useState<any>(mockDevice);
+
+  // Poll device status every 5 seconds
+  useEffect(() => {
+    const fetchDevice = async () => {
+      try {
+        // Find device document
+        const response = await databases.listDocuments(
+          import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db",
+          import.meta.env.VITE_APPWRITE_COLLECTION_ID_DEVICES || "devices" // fallback
+        );
+        if (response.documents.length > 0) {
+          // Assuming the first document is the ESP32
+          const doc = response.documents[0];
+          const isOffline = (Date.now() - new Date(doc.$updatedAt).getTime()) > 150000;
+          setDeviceData({
+            deviceId: doc.deviceId || "ESP32_DEVICE_01",
+            status: isOffline ? "offline" : "online",
+            firmwareVersion: doc.firmwareVersion || "1.0.0",
+            wifiStrength: doc.wifiStrength || 0,
+            totalScansToday: doc.totalScansToday || 0,
+            lastSeen: doc.$updatedAt,
+          });
+        }
+      } catch (err) {
+        console.error("Failed to fetch device status:", err);
+      }
+    };
+
+    fetchDevice();
+    const interval = setInterval(fetchDevice, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleSync = async () => {
     setSyncing(true);
-    setTimeout(() => {
+    try {
+      await databases.createDocument(
+        import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db",
+        import.meta.env.VITE_APPWRITE_COLLECTION_ID_COMMANDS || "device_commands",
+        ID.unique(),
+        {
+          command: "updateDevice",
+          status: "pending",
+          deviceId: deviceData.deviceId
+        }
+      );
+      toast.success("Sync command sent to device");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to sync");
+    } finally {
       setSyncing(false);
-      toast.success("Device synced successfully");
-    }, 2000);
+    }
   };
 
-  const isOnline = mockDevice.status === "online";
+  const handleRestart = async () => {
+    try {
+      await databases.createDocument(
+        import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db",
+        import.meta.env.VITE_APPWRITE_COLLECTION_ID_COMMANDS || "device_commands",
+        ID.unique(),
+        {
+          command: "restartDevice",
+          status: "pending",
+          deviceId: deviceData.deviceId
+        }
+      );
+      toast.success("Restart command sent to device");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to send restart command");
+    }
+  };
+
+  const handleWipeDB = async () => {
+    if (!confirm("Are you sure you want to permanently erase ALL fingerprints from the physical ESP32 scanner? This cannot be undone.")) return;
+
+    try {
+      await databases.createDocument(
+        import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db",
+        import.meta.env.VITE_APPWRITE_COLLECTION_ID_COMMANDS || "device_commands",
+        ID.unique(),
+        {
+          command: "restartDevice",
+          status: "pending",
+          deviceId: deviceData.deviceId,
+          memberName: "WIPE_DB"
+        }
+      );
+      toast.success("Wipe command sent to device");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to send wipe command");
+    }
+  };
+
+  const handleAdminSetup = async () => {
+    try {
+      const response = await databases.createDocument(
+        import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db",
+        import.meta.env.VITE_APPWRITE_COLLECTION_ID_COMMANDS || "device_commands", // fallback
+        ID.unique(),
+        {
+          command: "setupAdmin",
+          status: "pending",
+          memberName: "Super Admin",
+          deviceId: deviceData.deviceId
+        }
+      );
+      setActiveSetupCmdId(response.$id);
+      setSetupStep("polling");
+      setAdminSetupOpen(true);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to send command to device");
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.name.endsWith(".bin")) {
+      toast.error("Please upload a compiled .bin firmware file");
+      return;
+    }
+
+    setUploading(true);
+    const toastId = toast.loading("Uploading firmware to cloud...");
+    try {
+      // 1. Upload to Appwrite Storage
+      const bucketId = import.meta.env.VITE_APPWRITE_FIRMWARE_BUCKET || "firmware_updates";
+      const uploadedFile = await storage.createFile(bucketId, ID.unique(), file);
+
+      toast.loading("Dispatching OTA command to ESP32...", { id: toastId });
+
+      // 2. Dispatch command to device
+      await databases.createDocument(
+        import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db",
+        import.meta.env.VITE_APPWRITE_COLLECTION_ID_COMMANDS || "device_commands",
+        ID.unique(),
+        {
+          command: "updateFirmware",
+          status: "pending",
+          deviceId: deviceData.deviceId,
+          memberName: uploadedFile.$id // Repurposing memberName to pass the file ID
+        }
+      );
+
+      toast.success("Firmware uploaded! ESP32 is downloading the update.", { id: toastId });
+    } catch (err: any) {
+      if (err.code === 404) {
+        toast.error("Bucket doesn't exist. Please create a Storage Bucket with ID 'firmware_updates' in Appwrite.", { id: toastId, duration: 8000 });
+      } else {
+        toast.error(err.message || "Failed to upload firmware", { id: toastId });
+      }
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const isOnline = deviceData.status === "online";
 
   const details = [
-    { label: "Device ID", value: mockDevice.deviceId, icon: Cpu },
-    { label: "Status", value: mockDevice.status, icon: Wifi, isStatus: true },
-    { label: "Last Seen", value: new Date(mockDevice.lastSeen).toLocaleString(), icon: Clock },
-    { label: "Firmware", value: mockDevice.firmwareVersion, icon: Cpu },
-    { label: "WiFi Signal", value: `${mockDevice.wifiStrength} dBm`, icon: Wifi },
-    { label: "Scans Today", value: mockDevice.totalScansToday, icon: Fingerprint },
+    { label: "Device ID", value: deviceData.deviceId, icon: Cpu },
+    { label: "Status", value: deviceData.status, icon: Wifi, isStatus: true },
+    { label: "Last Seen", value: new Date(deviceData.lastSeen).toLocaleString(), icon: Clock },
+    { label: "Firmware", value: deviceData.firmwareVersion, icon: Cpu },
+    { label: "WiFi Signal", value: `${deviceData.wifiStrength} dBm`, icon: Wifi },
+    { label: "Scans Today", value: deviceData.totalScansToday, icon: Fingerprint },
   ];
 
   return (
@@ -53,7 +245,7 @@ export default function DeviceManagement() {
         </div>
         <div>
           <div className="flex items-center gap-2">
-            <h3 className="text-lg font-semibold text-foreground">{mockDevice.deviceId}</h3>
+            <h3 className="text-lg font-semibold text-foreground">{deviceData.deviceId}</h3>
             <div className="flex items-center gap-1.5">
               <div className={cn("h-2 w-2 rounded-full", isOnline ? "bg-success animate-pulse-dot" : "bg-absent")} />
               <span className={cn("text-xs font-medium", isOnline ? "text-success" : "text-absent")}>
@@ -61,7 +253,7 @@ export default function DeviceManagement() {
               </span>
             </div>
           </div>
-          <p className="text-sm text-muted-foreground">Last synced: {new Date(mockDevice.lastSeen).toLocaleString()}</p>
+          <p className="text-sm text-muted-foreground">Last synced: {new Date(deviceData.lastSeen).toLocaleString()}</p>
         </div>
       </motion.div>
 
@@ -97,16 +289,83 @@ export default function DeviceManagement() {
             <RefreshCw className={cn("h-4 w-4", syncing && "animate-spin")} />
             {syncing ? "Syncing..." : "Sync Members"}
           </Button>
-          <Button variant="outline" className="gap-2">
+          <Button variant="outline" className="gap-2" onClick={() => navigate("/members")}>
             <Plus className="h-4 w-4" />
             Enter Enrollment Mode
           </Button>
-          <Button variant="outline" className="gap-2 text-destructive hover:text-destructive">
+          <Button variant="outline" className="gap-2 border-primary/50 text-primary hover:bg-primary/10" onClick={handleAdminSetup}>
+            <Fingerprint className="h-4 w-4" />
+            Setup Admin Fingerprint
+          </Button>
+          <Button
+            variant="outline"
+            className="gap-2 border-amber-500/50 text-amber-500 hover:bg-amber-500/10"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+          >
+            <UploadCloud className={cn("h-4 w-4", uploading && "animate-pulse")} />
+            {uploading ? "Uploading..." : "Upload Firmware (OTA)"}
+          </Button>
+          <input
+            type="file"
+            ref={fileInputRef}
+            className="hidden"
+            accept=".bin"
+            onChange={handleFileUpload}
+          />
+          <Button variant="outline" className="gap-2 text-destructive hover:text-destructive" onClick={handleRestart}>
             <RotateCcw className="h-4 w-4" />
             Restart Device
           </Button>
+          <Button variant="outline" className="gap-2 border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground dark:hover:bg-destructive dark:hover:text-destructive-foreground" onClick={handleWipeDB}>
+            <Trash2 className="h-4 w-4" />
+            Wipe Fingerprint DB
+          </Button>
         </div>
       </motion.div>
+      <Dialog open={adminSetupOpen} onOpenChange={setAdminSetupOpen}>
+        <DialogContent className="bg-card border-border">
+          {setupStep === "polling" ? (
+            <div className="flex flex-col items-center py-8">
+              <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10 animate-pulse">
+                <Fingerprint className="h-8 w-8 text-primary" />
+              </div>
+              <h3 className="text-lg font-semibold text-foreground">Waiting for Device</h3>
+              <p className="mt-2 text-center text-sm text-muted-foreground">
+                Place your finger on the ESP32 sensor to register as the Super Admin.<br />
+                Please hold your finger steady until the device confirms.
+              </p>
+              <Button variant="outline" className="mt-6" onClick={() => setAdminSetupOpen(false)}>Cancel</Button>
+            </div>
+          ) : setupStep === "success" ? (
+            <div className="flex flex-col items-center py-8">
+              <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-success/10">
+                <Fingerprint className="h-8 w-8 text-success" />
+              </div>
+              <h3 className="text-lg font-semibold text-foreground">Setup Successful!</h3>
+              <p className="mt-2 text-center text-sm text-muted-foreground">
+                Super Admin fingerprint has been registered.
+              </p>
+              <Button className="mt-6" onClick={() => setAdminSetupOpen(false)}>Close</Button>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center py-8">
+              <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-destructive/10">
+                <Fingerprint className="h-8 w-8 text-destructive" />
+              </div>
+              <h3 className="text-lg font-semibold text-foreground">Setup Failed</h3>
+              <p className="mt-2 text-center text-sm text-muted-foreground">
+                {setupStatusMsg === "timeout" ? "The operation timed out." :
+                  "Sensor failed to capture fingerprints."}
+              </p>
+              <div className="mt-6 flex gap-3">
+                <Button variant="outline" onClick={() => setAdminSetupOpen(false)}>Cancel</Button>
+                <Button onClick={handleAdminSetup}>Try Again</Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
   );
 }

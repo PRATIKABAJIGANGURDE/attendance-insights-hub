@@ -8,7 +8,8 @@ interface AttendanceCalendarProps {
 }
 
 export default function AttendanceCalendar({ data }: AttendanceCalendarProps) {
-  const [currentMonth, setCurrentMonth] = useState(new Date(2026, 2, 1)); // March 2026
+  const current = new Date();
+  const [currentMonth, setCurrentMonth] = useState(new Date(current.getFullYear(), current.getMonth(), 1));
 
   const { days, startDay, daysInMonth } = useMemo(() => {
     const year = currentMonth.getFullYear();
@@ -22,7 +23,9 @@ export default function AttendanceCalendar({ data }: AttendanceCalendarProps) {
     return { days: daysArr, startDay: sd, daysInMonth: dim };
   }, [currentMonth, data]);
 
-  const today = "2026-03-01";
+  // Native system today tracker
+  const todayD = new Date();
+  const today = `${todayD.getFullYear()}-${String(todayD.getMonth() + 1).padStart(2, "0")}-${String(todayD.getDate()).padStart(2, "0")}`;
   const monthName = currentMonth.toLocaleString("default", { month: "long", year: "numeric" });
 
   const prevMonth = () => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1));

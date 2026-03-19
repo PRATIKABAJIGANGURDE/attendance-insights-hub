@@ -1,33 +1,50 @@
 export interface Member {
-  id: number;
+  $id: string;
   name: string;
   role: string;
-  fingerprintId: string;
+  fingerprintId?: string;
   isActive: boolean;
-  createdAt: string;
-  attendancePercent: number;
-  lastSeen: string;
+  attendancePercent?: number;
+  lastSeen?: string;
+  membershipLevel?: string;
+  $createdAt: string;
+  $updatedAt: string;
 }
 
 export interface AttendanceRecord {
-  id: number;
-  memberId: number;
-  timestamp: string;
+  $id: string;
+  memberId: string;
   deviceId: string;
+  timestamp: string;
+  attendanceStatus?: string;
+  sessionDuration?: number;
+  location?: string;
+  remarks?: string;
+  $createdAt: string;
+  $updatedAt: string;
 }
 
 export interface ActivityEvent {
-  id: string;
-  type: "attendance" | "admin" | "system";
+  $id: string;
+  eventType: "attendance" | "admin" | "system" | string;
   message: string;
-  time: string;
+  eventTime: string;
+  deviceId?: string;
+  memberId?: number;
+  severity?: string;
+  location?: string;
+  $createdAt: string;
+  $updatedAt: string;
 }
 
 export interface Device {
+  $id: string;
   deviceId: string;
-  lastSeen: string;
-  status: "online" | "offline";
-  firmwareVersion: string;
-  wifiStrength: number;
-  totalScansToday: number;
+  status?: string;
+  firmwareVersion?: string;
+  wifiStrength?: number;
+  totalScansToday?: number;
+  lastSeen?: string;
+  $createdAt: string;
+  $updatedAt: string;
 }

@@ -9,6 +9,8 @@ import MemberProfile from "./pages/MemberProfile";
 import Analytics from "./pages/Analytics";
 import DeviceManagement from "./pages/DeviceManagement";
 import NotFound from "./pages/NotFound";
+import Login from "./pages/Login";
+import SuperAdminRegister from "./pages/SuperAdminRegister";
 
 const queryClient = new QueryClient();
 
@@ -20,6 +22,8 @@ const App = () => (
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<Dashboard />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/admin-register" element={<SuperAdminRegister />} />
           <Route path="/members" element={<Members />} />
           <Route path="/members/:id" element={<MemberProfile />} />
           <Route path="/analytics" element={<Analytics />} />

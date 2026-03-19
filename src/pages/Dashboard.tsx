@@ -1,25 +1,88 @@
+import { useState, useEffect } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import StatCard from "@/components/StatCard";
 import ActivityFeed from "@/components/ActivityFeed";
 import AttendanceTable from "@/components/AttendanceTable";
 import { Users, UserCheck, UserX, TrendingUp, Cpu } from "lucide-react";
-import { mockMembers, mockTodayAttendance, mockActivityFeed, mockDevice } from "@/data/mockData";
+import { databases } from "@/lib/appwrite";
+import { Query } from "appwrite";
 
 export default function Dashboard() {
-  const totalMembers = mockMembers.filter((m) => m.isActive).length;
-  const presentToday = mockTodayAttendance.length;
-  const absentToday = totalMembers - presentToday;
-  const attendanceRate = Math.round((presentToday / totalMembers) * 100);
+  const [members, setMembers] = useState<any[]>([]);
+  const [attendance, setAttendance] = useState<any[]>([]);
+  const [events, setEvents] = useState<any[]>([]);
+  const [device, setDevice] = useState<any>({ status: "offline" });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const dbId = import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db";
+
+        // Fetch recent members
+        const membersRes = await databases.listDocuments(dbId, import.meta.env.VITE_APPWRITE_COLLECTION_ID || "members", [Query.limit(100)]);
+        setMembers(membersRes.documents);
+
+        // Fetch today's attendance
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const attendRes = await databases.listDocuments(dbId, "attendance", [
+          Query.greaterThanEqual("$createdAt", today.toISOString()),
+          Query.limit(100),
+          Query.orderDesc("$createdAt")
+        ]);
+        setAttendance(attendRes.documents);
+
+        // Fetch recent activities
+        const actRes = await databases.listDocuments(dbId, "activity_events", [
+          Query.orderDesc("$createdAt"),
+          Query.limit(8)
+        ]);
+        setEvents(actRes.documents);
+
+        // Fetch primary device status
+        const devRes = await databases.listDocuments(dbId, import.meta.env.VITE_APPWRITE_COLLECTION_ID_DEVICES || "devices", [Query.limit(1)]);
+        if (devRes.documents.length > 0) {
+          const doc = devRes.documents[0];
+          // Device pings every ~1 minute. If no ping in 2.5 mins, it lost power.
+          const isOffline = (Date.now() - new Date(doc.$updatedAt).getTime()) > 150000;
+          setDevice({ ...doc, status: isOffline ? "offline" : "online" });
+        }
+      } catch (err) {
+        console.error("Dashboard fetch error:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
+
+  const nonAdmins = members.filter((m) => m.isActive !== false && m.role !== "super_admin");
+  const totalMembers = nonAdmins.length;
+
+  // Get all valid fingerprint IDs for active non-admins
+  const validMemberIds = new Set(nonAdmins.map(m => String(m.fingerprintId || m.$id)));
+
+  // Make a set of member IDs who are present today AND are valid active members, to avoid double counting
+  const presentMemberIds = new Set(
+    attendance
+      .map(a => String(a.memberId))
+      .filter(id => validMemberIds.has(id))
+  );
+
+  const presentToday = presentMemberIds.size;
+  const absentToday = Math.max(0, totalMembers - presentToday);
+  const attendanceRate = totalMembers > 0 ? Math.round((presentToday / totalMembers) * 100) : 0;
 
   // Build full attendance list (present + absent)
-  const allRows = mockMembers
-    .filter((m) => m.isActive)
+  const allRows = nonAdmins
     .map((m) => {
-      const record = mockTodayAttendance.find((a) => a.memberId === m.id);
+      // Find the most recent attendance record for this member
+      const record = attendance.find((a) => String(a.memberId) === String(m.fingerprintId || m.$id));
       return {
         memberName: m.name,
-        role: m.role,
-        timestamp: record?.timestamp || "",
+        role: m.role || "Member",
+        timestamp: record ? record.$createdAt : "",
         status: record ? ("present" as const) : ("absent" as const),
       };
     })
@@ -44,9 +107,9 @@ export default function Dashboard() {
         <StatCard title="Attendance Rate" value={`${attendanceRate}%`} icon={TrendingUp} variant="warning" delay={0.15} />
         <StatCard
           title="Device Status"
-          value={mockDevice.status === "online" ? "Online" : "Offline"}
+          value={device.status === "online" ? "Online" : "Offline"}
           icon={Cpu}
-          variant={mockDevice.status === "online" ? "success" : "danger"}
+          variant={device.status === "online" ? "success" : "danger"}
           delay={0.2}
         />
       </div>
@@ -57,7 +120,7 @@ export default function Dashboard() {
           <AttendanceTable rows={allRows} />
         </div>
         <div>
-          <ActivityFeed events={mockActivityFeed} />
+          <ActivityFeed events={events} />
         </div>
       </div>
     </DashboardLayout>

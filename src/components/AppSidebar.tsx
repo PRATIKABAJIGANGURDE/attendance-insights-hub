@@ -22,8 +22,8 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
           <Fingerprint className="h-5 w-5 text-primary-foreground" />
         </div>
         <div>
-          <h1 className="text-sm font-semibold text-foreground">BioAttend</h1>
-          <p className="text-[10px] text-muted-foreground">Admin Portal</p>
+          <h1 className="text-sm font-semibold text-foreground">ASGS Dashboard</h1>
+          <p className="text-[10px] text-muted-foreground">Atharva Satellite Ground Station</p>
         </div>
       </div>
 
@@ -86,7 +86,7 @@ export function MobileHeader() {
       </Sheet>
       <div className="flex items-center gap-2">
         <Fingerprint className="h-5 w-5 text-primary" />
-        <span className="text-sm font-semibold text-foreground">BioAttend</span>
+        <span className="text-sm font-semibold text-foreground">ASGS</span>
       </div>
     </header>
   );

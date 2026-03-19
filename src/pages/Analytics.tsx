@@ -1,12 +1,60 @@
+import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import DashboardLayout from "@/components/DashboardLayout";
-import { mockMonthlyTrend, mockMembers, mockWeeklyAttendance } from "@/data/mockData";
+import { mockMonthlyTrend, mockWeeklyAttendance } from "@/data/mockData";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from "recharts";
+import { databases } from "@/lib/appwrite";
+import { Query } from "appwrite";
 
 export default function Analytics() {
-  const sortedMembers = [...mockMembers]
-    .filter((m) => m.isActive)
-    .sort((a, b) => b.attendancePercent - a.attendancePercent);
+  const [members, setMembers] = useState<any[]>([]);
+
+  useEffect(() => {
+    const fetchMembers = async () => {
+      try {
+        const dbId = import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db";
+        const res = await databases.listDocuments(dbId, import.meta.env.VITE_APPWRITE_COLLECTION_ID || "members", [Query.limit(100)]);
+        
+        // Fetch recent attendance to dynamically calculate correct percent
+        const attendRes = await databases.listDocuments(dbId, "attendance", [
+          Query.orderDesc("$createdAt"),
+          Query.limit(1000)
+        ]);
+        
+        const presentCounts: Record<string, Set<string>> = {};
+        attendRes.documents.forEach(doc => {
+          const mId = doc.memberId;
+          const d = new Date(doc.$createdAt);
+          const dateStr = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+          if (!presentCounts[mId]) presentCounts[mId] = new Set();
+          presentCounts[mId].add(dateStr);
+        });
+
+        const today = new Date();
+        today.setHours(0,0,0,0);
+        
+        const mapped = res.documents.map(m => {
+          const joinDate = new Date(m.$createdAt);
+          joinDate.setHours(0,0,0,0);
+          let daysSinceJoin = Math.floor((today.getTime() - joinDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+          if (daysSinceJoin < 1) daysSinceJoin = 1;
+          
+          const presents = presentCounts[m.fingerprintId || m.$id]?.size || 0;
+          const calcPercent = Math.round((presents / daysSinceJoin) * 100);
+          return { ...m, computedAttendance: calcPercent };
+        });
+
+        setMembers(mapped);
+      } catch (err) {
+        console.error("Failed to load members", err);
+      }
+    };
+    fetchMembers();
+  }, []);
+
+  const sortedMembers = [...members]
+    .filter((m) => m.isActive !== false && m.role !== "super_admin")
+    .sort((a, b) => (b.computedAttendance ?? 0) - (a.computedAttendance ?? 0));
 
   return (
     <DashboardLayout>
@@ -65,7 +113,7 @@ export default function Analytics() {
           <h3 className="mb-4 text-sm font-semibold text-foreground">Member Reliability Ranking</h3>
           <div className="space-y-3">
             {sortedMembers.map((m, i) => (
-              <div key={m.id} className="flex items-center gap-4">
+              <div key={m.$id} className="flex items-center gap-4">
                 <span className="w-6 text-center text-xs font-bold text-muted-foreground">#{i + 1}</span>
                 <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-[10px] font-semibold text-primary">
                   {m.name.split(" ").map((n) => n[0]).join("")}
@@ -75,13 +123,13 @@ export default function Analytics() {
                   <div className="h-2 rounded-full bg-surface-3">
                     <motion.div
                       initial={{ width: 0 }}
-                      animate={{ width: `${m.attendancePercent}%` }}
+                      animate={{ width: `${m.computedAttendance ?? 0}%` }}
                       transition={{ duration: 0.6, delay: i * 0.05 }}
                       className="h-2 rounded-full bg-primary"
                     />
                   </div>
                 </div>
-                <span className="w-12 text-right text-xs font-semibold text-foreground">{m.attendancePercent}%</span>
+                <span className="w-12 text-right text-xs font-semibold text-foreground">{m.computedAttendance ?? 0}%</span>
               </div>
             ))}
           </div>

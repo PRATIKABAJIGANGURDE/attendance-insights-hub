@@ -1,18 +1,79 @@
+import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import DashboardLayout from "@/components/DashboardLayout";
 import AttendanceCalendar from "@/components/AttendanceCalendar";
-import { mockMembers, generateMemberAttendance } from "@/data/mockData";
 import { ArrowLeft, Fingerprint, TrendingUp, Clock, Calendar } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useMemo } from "react";
+import { databases } from "@/lib/appwrite";
+import { Query } from "appwrite";
 import { cn } from "@/lib/utils";
 
 export default function MemberProfile() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const member = mockMembers.find((m) => m.id === Number(id));
-  const attendanceData = useMemo(() => generateMemberAttendance(Number(id)), [id]);
+
+  const [member, setMember] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [attendanceData, setAttendanceData] = useState<Record<string, "present" | "absent">>({});
+
+  useEffect(() => {
+    const fetchProfile = async () => {
+      if (!id) return;
+      try {
+        const dbId = import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db";
+        // 1. Fetch Member Doc
+        const m = await databases.getDocument(dbId, import.meta.env.VITE_APPWRITE_COLLECTION_ID || "members", id);
+        setMember(m);
+
+        // 2. Fetch Recent Attendance for this Fingerprint ID
+        const logs = await databases.listDocuments(dbId, "attendance", [
+          Query.equal("memberId", String(m.fingerprintId)),
+          Query.orderDesc("$createdAt"),
+          Query.limit(365) // get up to a year of data
+        ]);
+
+        // Transform into the { "YYYY-MM-DD": "present" } format expected by the calendar
+        const attMap: Record<string, "present" | "absent"> = {};
+        logs.documents.forEach(doc => {
+          const d = new Date(doc.$createdAt);
+          const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+          attMap[dateStr] = "present";
+        });
+
+        // Compute absent days from registration date to today
+        const joinDate = new Date(m.$createdAt);
+        joinDate.setHours(0, 0, 0, 0);
+        const todayD = new Date();
+        todayD.setHours(0, 0, 0, 0);
+
+        for (let d = new Date(joinDate); d <= todayD; d.setDate(d.getDate() + 1)) {
+          const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+          if (!attMap[dateStr]) {
+            attMap[dateStr] = "absent";
+          }
+        }
+
+        setAttendanceData(attMap);
+
+      } catch (err) {
+        console.error("Failed to load profile", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchProfile();
+  }, [id]);
+
+  if (loading) {
+    return (
+      <DashboardLayout>
+        <div className="flex justify-center py-20">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+        </div>
+      </DashboardLayout>
+    );
+  }
 
   if (!member) {
     return (
@@ -22,13 +83,16 @@ export default function MemberProfile() {
     );
   }
 
+  // Calculate live stats
   const presentDays = Object.values(attendanceData).filter((v) => v === "present").length;
-  const totalDays = Object.keys(attendanceData).length;
-  const absentStreak = 2; // mock
-  const avgArrival = "10:12 AM"; // mock
+  const totalDays = Object.keys(attendanceData).length || 1; // avoid divide by zero
+  const calculatedPercent = Math.round((presentDays / totalDays) * 100);
+  const attendancePercent = calculatedPercent; // Ignore backend, which defaults to 100
+  const absentStreak = 0; // Requires complex date math, skipping for now
+  const avgArrival = "—";
 
   const stats = [
-    { label: "Attendance Rate", value: `${Math.round((presentDays / totalDays) * 100)}%`, icon: TrendingUp, color: "text-success" },
+    { label: "Attendance Rate", value: `${attendancePercent}%`, icon: TrendingUp, color: "text-success" },
     { label: "Present Days", value: presentDays, icon: Calendar, color: "text-primary" },
     { label: "Absent Streak", value: `${absentStreak} days`, icon: Clock, color: "text-absent" },
     { label: "Avg. Arrival", value: avgArrival, icon: Clock, color: "text-warning" },
@@ -57,9 +121,9 @@ export default function MemberProfile() {
               <span>•</span>
               <span className={cn(
                 "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold",
-                member.isActive ? "status-present" : "status-absent"
+                member.isActive !== false ? "status-present" : "status-absent"
               )}>
-                {member.isActive ? "Active" : "Inactive"}
+                {member.isActive !== false ? "Active" : "Inactive"}
               </span>
             </div>
           </div>
