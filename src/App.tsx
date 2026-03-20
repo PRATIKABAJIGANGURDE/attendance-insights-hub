@@ -13,6 +13,8 @@ import Login from "./pages/Login";
 import SuperAdminRegister from "./pages/SuperAdminRegister";
 import Register from "./pages/Register";
 import Approvals from "./pages/Approvals";
+import Tasks from "./pages/Tasks";
+import TvCast from "./pages/TvCast";
 import ProtectedRoute from "./components/ProtectedRoute";
 
 const queryClient = new QueryClient();
@@ -33,6 +35,8 @@ const App = () => (
           {/* Admin-Only Routes */}
           <Route element={<ProtectedRoute adminOnly />}>
             <Route path="/" element={<Dashboard />} />
+            <Route path="/tv" element={<TvCast />} />
+            <Route path="/tasks" element={<Tasks />} />
             <Route path="/approvals" element={<Approvals />} />
             <Route path="/members" element={<Members />} />
             <Route path="/analytics" element={<Analytics />} />

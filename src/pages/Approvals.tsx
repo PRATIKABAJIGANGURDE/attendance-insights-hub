@@ -1,14 +1,16 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { databases } from "@/lib/appwrite";
 import { ID, Query } from "appwrite";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { Check, X, UserCog, Fingerprint, RefreshCcw } from "lucide-react";
+import { Check, X, UserCog, Fingerprint, RefreshCcw, ArrowLeft } from "lucide-react";
 import { motion } from "framer-motion";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 export default function Approvals() {
+  const navigate = useNavigate();
   const [pendingUsers, setPendingUsers] = useState<any[]>([]);
   const [activeMembers, setActiveMembers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -168,6 +170,19 @@ export default function Approvals() {
 
   return (
     <DashboardLayout>
+      <div className="mb-4">
+        <Button 
+          variant="ghost" 
+          onClick={() => navigate('/')} 
+          className="group flex items-center gap-2 font-bold text-muted-foreground hover:text-primary transition-all p-0 hover:bg-transparent"
+        >
+          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-muted/50 group-hover:bg-primary/20 group-hover:text-primary transition-all">
+            <ArrowLeft className="h-4 w-4" />
+          </div>
+          Back to Dashboard
+        </Button>
+      </div>
+
       <div className="mb-8">
         <h2 className="text-2xl font-bold text-foreground">Web App Approvals</h2>
         <p className="mt-1 text-sm text-muted-foreground">Manage and link registration requests to physical fingerprints.</p>

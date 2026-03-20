@@ -3,11 +3,14 @@ import DashboardLayout from "@/components/DashboardLayout";
 import StatCard from "@/components/StatCard";
 import ActivityFeed from "@/components/ActivityFeed";
 import AttendanceTable from "@/components/AttendanceTable";
-import { Users, UserCheck, UserX, TrendingUp, Cpu } from "lucide-react";
+import { Users, UserCheck, UserX, TrendingUp, Cpu, ChevronRight } from "lucide-react";
 import { databases } from "@/lib/appwrite";
 import { Query } from "appwrite";
+import { useNavigate } from "react-router-dom";
+import { Button } from "@/components/ui/button";
 
 export default function Dashboard() {
+  const navigate = useNavigate();
   const [members, setMembers] = useState<any[]>([]);
   const [attendance, setAttendance] = useState<any[]>([]);
   const [events, setEvents] = useState<any[]>([]);
@@ -94,9 +97,19 @@ export default function Dashboard() {
 
   return (
     <DashboardLayout>
-      <div className="mb-8">
-        <h2 className="text-2xl font-bold text-foreground">Dashboard</h2>
-        <p className="mt-1 text-sm text-muted-foreground">Welcome back, Admin. Here's today's overview.</p>
+      <div className="mb-8 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <h2 className="text-2xl font-bold text-foreground">Dashboard</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Welcome back, Admin. Here's today's overview.</p>
+        </div>
+        <Button 
+          variant="outline" 
+          onClick={() => navigate('/members')} 
+          className="group flex items-center gap-2 font-bold bg-surface-1 border-border/50 hover:bg-primary/10 hover:text-primary hover:border-primary/30 transition-all rounded-xl shadow-sm"
+        >
+          View All Members
+          <ChevronRight className="h-4 w-4 group-hover:translate-x-1 transition-transform" />
+        </Button>
       </div>
 
       {/* Stats */}

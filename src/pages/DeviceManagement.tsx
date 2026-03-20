@@ -1,7 +1,7 @@
 import { motion } from "framer-motion";
 import DashboardLayout from "@/components/DashboardLayout";
 import { mockDevice } from "@/data/mockData";
-import { Cpu, Wifi, Clock, Fingerprint, RefreshCw, Plus, RotateCcw, UploadCloud, Trash2 } from "lucide-react";
+import { Cpu, Wifi, Clock, Fingerprint, RefreshCw, Plus, RotateCcw, UploadCloud, Trash2, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useState, useEffect, useRef } from "react";
@@ -223,8 +223,21 @@ export default function DeviceManagement() {
 
   return (
     <DashboardLayout>
+      <div className="mb-4">
+        <Button 
+          variant="ghost" 
+          onClick={() => navigate('/')} 
+          className="group flex items-center gap-2 font-bold text-muted-foreground hover:text-primary transition-all p-0 hover:bg-transparent"
+        >
+          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-muted/50 group-hover:bg-primary/20 group-hover:text-primary transition-all">
+            <ArrowLeft className="h-4 w-4" />
+          </div>
+          Back to Dashboard
+        </Button>
+      </div>
+
       <div className="mb-8">
-        <h2 className="text-2xl font-bold text-foreground">Device Management</h2>
+        <h2 className="text-2xl font-bold text-foreground font-mono uppercase tracking-tight">Device Management</h2>
         <p className="mt-1 text-sm text-muted-foreground">Monitor and control your ESP32 biometric device.</p>
       </div>
 

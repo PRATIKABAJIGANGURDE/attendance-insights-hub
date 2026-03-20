@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Users, BarChart3, Cpu, Fingerprint, Menu, LogOut, CheckSquare } from "lucide-react";
+import { LayoutDashboard, Users, BarChart3, Cpu, Fingerprint, Menu, LogOut, CheckSquare, ClipboardList, MonitorPlay } from "lucide-react";
 import { account, databases } from "@/lib/appwrite";
 import { Query } from "appwrite";
 import { cn } from "@/lib/utils";
@@ -67,6 +67,8 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   if (role === "superadmin") {
     items = [
       { to: "/", icon: LayoutDashboard, label: "Dashboard" },
+      { to: "/tv", icon: MonitorPlay, label: "Cast TV Mode" },
+      { to: "/tasks", icon: ClipboardList, label: "Tasks" },
       { to: "/members", icon: Users, label: "Members" },
       { to: "/analytics", icon: BarChart3, label: "Analytics" },
       { to: "/device", icon: Cpu, label: "Device" },
