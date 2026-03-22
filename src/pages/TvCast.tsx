@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Users, ClipboardList, Clock, Moon, Sparkles } from "lucide-react";
+import { Users, ClipboardList, Clock, Moon, Sparkles, Volume2, VolumeX } from "lucide-react";
 import { databases, client } from "@/lib/appwrite";
 import { Query } from "appwrite";
 import { motion, AnimatePresence } from "framer-motion";
@@ -25,6 +25,9 @@ export default function TvCast() {
   const [showWelcome, setShowWelcome] = useState(false);
   const [audioEnabled, setAudioEnabled] = useState(() => {
     return typeof window !== "undefined" && sessionStorage.getItem("tv_audio_enabled") === "true";
+  });
+  const [isMuted, setIsMuted] = useState(() => {
+    return typeof window !== "undefined" && sessionStorage.getItem("tv_is_muted") === "true";
   });
   const welcomeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -61,6 +64,11 @@ export default function TvCast() {
 
     const text = `Welcome back, ${name}. ${quote}`;
     console.log("Announcement Triggered (Inworld AI):", name);
+
+    if (isMuted) {
+      console.log("Audio suppressed (Muted mode)");
+      return;
+    }
 
     try {
       const response = await fetch("https://api.inworld.ai/tts/v1/voice", {
@@ -319,7 +327,25 @@ export default function TvCast() {
             Command & Control Center <span className="text-slate-600">•</span> {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
           </p>
         </div>
-        <div className="text-right">
+        <div className="flex items-center gap-4">
+          {/* Mute Toggle Button */}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => {
+              const newState = !isMuted;
+              setIsMuted(newState);
+              sessionStorage.setItem("tv_is_muted", String(newState));
+              toast.success(newState ? "Audio Muted" : "Audio Active", {
+                description: newState ? "Popups only" : "Voice announcements enabled",
+                duration: 2000
+              });
+            }}
+            className="h-10 w-10 rounded-xl bg-slate-800/40 border border-slate-700/50 hover:bg-slate-700/80 transition-all backdrop-blur-sm"
+          >
+            {isMuted ? <VolumeX className="h-5 w-5 text-slate-400" /> : <Volume2 className="h-5 w-5 text-blue-400" />}
+          </Button>
+
           <div className="flex items-center gap-2 border border-slate-700/50 px-4 py-2 rounded-full bg-slate-800/30 backdrop-blur-sm">
              <div className="h-2 w-2 bg-emerald-500 rounded-full animate-pulse" />
              <p className="text-slate-300 font-bold text-sm uppercase tracking-widest">Live Sync</p>
