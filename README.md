@@ -11,6 +11,7 @@ This project is built with:
 - Tailwind CSS
 - shadcn-ui
 - Appwrite Backend
+- Inworld AI TTS (Premium Audio)
 
 ## Quick Start
 

@@ -60,11 +60,11 @@ export default function Dashboard() {
     fetchData();
   }, []);
 
-  const nonAdmins = members.filter((m) => m.isActive !== false && m.role !== "super_admin");
-  const totalMembers = nonAdmins.length;
+  const activeMembers = members.filter((m) => m.isActive !== false);
+  const totalMembers = activeMembers.length;
 
-  // Get all valid fingerprint IDs for active non-admins
-  const validMemberIds = new Set(nonAdmins.map(m => String(m.fingerprintId || m.$id)));
+  // Get all valid fingerprint IDs for active members
+  const validMemberIds = new Set(activeMembers.map(m => String(m.fingerprintId || m.$id)));
 
   // Make a set of member IDs who are present today AND are valid active members, to avoid double counting
   const presentMemberIds = new Set(
@@ -78,7 +78,7 @@ export default function Dashboard() {
   const attendanceRate = totalMembers > 0 ? Math.round((presentToday / totalMembers) * 100) : 0;
 
   // Build full attendance list (present + absent)
-  const allRows = nonAdmins
+  const allRows = activeMembers
     .map((m) => {
       // Find the most recent attendance record for this member
       const record = attendance.find((a) => String(a.memberId) === String(m.fingerprintId || m.$id));

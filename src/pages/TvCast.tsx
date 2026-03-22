@@ -1,7 +1,10 @@
-import { useState, useEffect } from "react";
-import { Users, ClipboardList, Clock, Moon } from "lucide-react";
-import { databases } from "@/lib/appwrite";
+import { useState, useEffect, useRef } from "react";
+import { Users, ClipboardList, Clock, Moon, Sparkles } from "lucide-react";
+import { databases, client } from "@/lib/appwrite";
 import { Query } from "appwrite";
+import { motion, AnimatePresence } from "framer-motion";
+import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
 
 export default function TvCast() {
   const [members, setMembers] = useState<any[]>([]);
@@ -16,6 +19,102 @@ export default function TvCast() {
   const [isBusinessHours, setIsBusinessHours] = useState(false);
   const [isOvertime, setIsOvertime] = useState(false);
   const [breakEndTime, setBreakEndTime] = useState<Date | null>(null);
+  
+  // Welcome Popup States
+  const [welcomeMember, setWelcomeMember] = useState<{ name: string, quote: string } | null>(null);
+  const [showWelcome, setShowWelcome] = useState(false);
+  const [audioEnabled, setAudioEnabled] = useState(() => {
+    return typeof window !== "undefined" && sessionStorage.getItem("tv_audio_enabled") === "true";
+  });
+  const welcomeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Motivational Quotes
+  const motivationalQuotes = [
+    "Let's build something amazing today!",
+    "The sky is not the limit, it's the beginning.",
+    "Your hard work is the fuel for our mission.",
+    "Innovation starts with you.",
+    "Stay curious, stay inspired.",
+    "Small steps lead to giant leaps.",
+    "Great things never come from comfort zones.",
+    "Success is a team sport. Welcome back!",
+    "Ready to push the boundaries of technology?",
+    "Every line of code moves us closer to the stars."
+  ];
+
+  const speakWelcome = async (name: string, quote: string) => {
+    if (!audioEnabled) {
+      console.warn("Audio skipped: Interaction required. Click 'Launch Dashboard'.");
+      toast.info("Audio is locked. Click 'Launch Dashboard' to enable sounds.");
+      return;
+    }
+
+    const apiKey = import.meta.env.VITE_INWORLD_API_KEY;
+    const voiceId = import.meta.env.VITE_INWORLD_VOICE_ID || "Ashley";
+
+    if (!apiKey) {
+      toast.error("Inworld AI API Key is missing!", {
+        description: "Add VITE_INWORLD_API_KEY to .env.local and restart the server."
+      });
+      return;
+    }
+
+    const text = `Welcome back, ${name}. ${quote}`;
+    console.log("Announcement Triggered (Inworld AI):", name);
+
+    try {
+      const response = await fetch("https://api.inworld.ai/tts/v1/voice", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": apiKey.startsWith("Basic ") ? apiKey : `Basic ${apiKey}`
+        },
+        body: JSON.stringify({
+          text,
+          voiceId,
+          modelId: "inworld-tts-1.5-max"
+        })
+      });
+
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.message || "Inworld API request failed");
+      }
+
+      const data = await response.json();
+      if (!data.audioContent) {
+        throw new Error("No audio content returned from Inworld");
+      }
+
+      // Convert Base64 to Blob
+      const audioBlob = await (await fetch(`data:audio/mp3;base64,${data.audioContent}`)).blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+      
+      await audio.play();
+      console.log("Inworld AI audio played successfully.");
+    } catch (err: any) {
+      console.error("Inworld AI error:", err);
+      toast.error("Inworld AI Audio Failed", {
+        description: err.message || "Check your API key or network connection."
+      });
+    }
+  };
+
+  const triggerWelcome = (name: string) => {
+    if (welcomeTimeoutRef.current) clearTimeout(welcomeTimeoutRef.current);
+    
+    const randomQuote = motivationalQuotes[Math.floor(Math.random() * motivationalQuotes.length)];
+    setWelcomeMember({ name, quote: randomQuote });
+    setShowWelcome(true);
+    
+    // Play audio if enabled
+    speakWelcome(name, randomQuote);
+
+    welcomeTimeoutRef.current = setTimeout(() => {
+      setShowWelcome(false);
+    }, 8000); // 8 seconds display
+  };
 
   // Fetch Data Routine
   useEffect(() => {
@@ -57,6 +156,34 @@ export default function TvCast() {
       clearTimeout(midnightTimer);
     };
   }, []);
+
+  // Real-time Attendance Subscription
+  useEffect(() => {
+    const dbId = import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db";
+    const unsubscribe = client.subscribe(
+      `databases.${dbId}.collections.attendance.documents`,
+      (response) => {
+        if (response.events.some(e => e.includes('.create'))) {
+          const newLog = response.payload as any;
+          // Find all potential member matches (to handle ID collisions)
+          const potentialMatches = members.filter(m => String(m.fingerprintId || m.$id) === String(newLog.memberId));
+          
+          // Prioritize matches that are NOT named "Super Admin" and matches that ARE named "Pratik"
+          const preferredMember = potentialMatches.find(m => m.name.toLowerCase().includes("pratik")) || 
+                                  potentialMatches.find(m => m.name.toLowerCase() !== "super admin") || 
+                                  potentialMatches[0];
+          
+          if (preferredMember) {
+            triggerWelcome(preferredMember.name);
+            // Also refresh attendance to update the list
+            setAttendance(prev => [newLog, ...prev.slice(0, 199)]);
+          }
+        }
+      }
+    );
+
+    return () => unsubscribe();
+  }, [members]);
 
   // Countdown & Shift Routine (Runs every second)
   useEffect(() => {
@@ -138,7 +265,7 @@ export default function TvCast() {
   };
 
   // Compute Checked-In Members
-  const validMemberMaps = new Map(members.filter(m => m.isActive !== false && m.role !== "super_admin").map(m => [String(m.fingerprintId || m.$id), m]));
+  const validMemberMaps = new Map(members.filter(m => m.isActive !== false).map(m => [String(m.fingerprintId || m.$id), m]));
   
   const presentMemberNames = Array.from(new Set(attendance.map(a => String(a.memberId))))
       .filter(id => validMemberMaps.has(id))
@@ -294,6 +421,109 @@ export default function TvCast() {
         </div>
 
       </div>
+
+      {/* Welcome Popup Overlay */}
+      <AnimatePresence>
+        {showWelcome && welcomeMember && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md p-10"
+          >
+            <motion.div 
+              initial={{ scale: 0.8, y: 40, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              exit={{ scale: 0.9, y: 20, opacity: 0 }}
+              transition={{ type: "spring", damping: 25, stiffness: 300 }}
+              className="w-full max-w-5xl aspect-video glass-card relative overflow-hidden flex flex-col items-center justify-center text-center p-16 border-2 border-primary/50"
+            >
+              {/* Animated Background Elements */}
+              <div className="absolute inset-0 overflow-hidden pointer-events-none">
+                <div className="absolute -top-24 -left-24 w-64 h-64 bg-primary/20 rounded-full blur-[100px] animate-pulse" />
+                <div className="absolute -bottom-24 -right-24 w-64 h-64 bg-blue-500/20 rounded-full blur-[100px] animate-pulse" />
+              </div>
+
+              <motion.div 
+                initial={{ scale: 0 }}
+                animate={{ scale: 1 }}
+                transition={{ delay: 0.2, type: "spring" }}
+                className="h-24 w-24 bg-primary rounded-full flex items-center justify-center mb-10 shadow-[0_0_50px_rgba(59,130,246,0.6)]"
+              >
+                <Sparkles className="h-12 w-12 text-white" />
+              </motion.div>
+
+              <motion.h1 
+                initial={{ y: 20, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                transition={{ delay: 0.3 }}
+                className="text-7xl font-black text-white mb-6 uppercase tracking-tight"
+              >
+                Welcome, {welcomeMember.name}!
+              </motion.h1>
+
+              <motion.div 
+                initial={{ y: 20, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                transition={{ delay: 0.4 }}
+                className="h-1 w-32 bg-primary rounded-full mb-8"
+              />
+
+              <motion.p 
+                initial={{ y: 20, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                transition={{ delay: 0.5 }}
+                className="text-4xl text-slate-300 font-medium italic max-w-3xl leading-relaxed"
+              >
+                "{welcomeMember.quote}"
+              </motion.p>
+
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay: 1.5 }}
+                className="absolute bottom-12 text-slate-500 font-bold uppercase tracking-[0.5em] text-sm"
+              >
+                System Verified
+              </motion.div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Audio Unlock Overlay (Browser Requirement) */}
+      <AnimatePresence>
+        {!audioEnabled && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-950/80 backdrop-blur-xl"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="text-center p-12 bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl max-w-lg"
+            >
+              <Users className="h-16 w-16 text-blue-500 mx-auto mb-6" />
+              <h2 className="text-3xl font-bold text-white mb-4">TV Dashboard Ready</h2>
+              <p className="text-slate-400 mb-8 text-lg">
+                Click the button below to synchronize live data and enable the voice announcement system.
+              </p>
+              <Button 
+                onClick={() => {
+                  sessionStorage.setItem("tv_audio_enabled", "true");
+                  setAudioEnabled(true);
+                  toast.success("Audio Unlocked Successfully!");
+                }} 
+                className="w-full h-16 text-xl font-bold uppercase tracking-widest shadow-lg shadow-blue-500/20"
+              >
+                Launch Dashboard
+              </Button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
