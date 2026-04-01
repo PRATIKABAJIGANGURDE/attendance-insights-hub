@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
-import { Users, ClipboardList, Clock, Moon, Sparkles, Volume2, VolumeX } from "lucide-react";
+import { Users, ClipboardList, Clock, Moon, Sparkles, Volume2, VolumeX, Unlock } from "lucide-react";
 import { databases, client } from "@/lib/appwrite";
-import { Query } from "appwrite";
+import { Query, ID } from "appwrite";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
@@ -265,6 +265,33 @@ export default function TvCast() {
     return () => clearInterval(timerInterval);
   }, [breakEndTime, isOvertime]);
 
+  // Remote Unlock Controller
+  const [isUnlocking, setIsUnlocking] = useState(false);
+  const handleRemoteUnlock = async () => {
+    setIsUnlocking(true);
+    const toastId = toast.loading("Sending unlock command...");
+    try {
+      await databases.createDocument(
+        import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db",
+        import.meta.env.VITE_APPWRITE_COLLECTION_ID_COMMANDS || "device_commands",
+        ID.unique(),
+        {
+          command: "unlockDoor",
+          status: "pending",
+          deviceId: "ESP32_DEVICE_01" // Assuming default ID; pull from context if available
+        }
+      );
+      toast.success("Remote Unlock Triggered!", { id: toastId });
+    } catch (err: any) {
+      toast.error("Failed to unlock door", { 
+        id: toastId, 
+        description: err.message || "Appwrite request failed" 
+      });
+    } finally {
+      setIsUnlocking(false);
+    }
+  };
+
   // Break Controllers
   const startBreak = (minutes: number) => {
     const end = new Date();
@@ -344,6 +371,16 @@ export default function TvCast() {
             className="h-10 w-10 rounded-xl bg-slate-800/40 border border-slate-700/50 hover:bg-slate-700/80 transition-all backdrop-blur-sm"
           >
             {isMuted ? <VolumeX className="h-5 w-5 text-slate-400" /> : <Volume2 className="h-5 w-5 text-blue-400" />}
+          </Button>
+          
+          <Button
+            variant="outline"
+            onClick={handleRemoteUnlock}
+            disabled={isUnlocking}
+            className="h-10 px-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20 text-emerald-400 font-bold uppercase tracking-widest transition-all backdrop-blur-sm shadow-[0_0_15px_rgba(16,185,129,0.1)] hover:shadow-[0_0_20px_rgba(16,185,129,0.2)] disabled:opacity-50"
+          >
+            <Unlock className={`h-4 w-4 mr-2 ${isUnlocking ? 'animate-pulse' : ''}`} />
+            {isUnlocking ? "Opening..." : "Open Door"}
           </Button>
 
           <div className="flex items-center gap-2 border border-slate-700/50 px-4 py-2 rounded-full bg-slate-800/30 backdrop-blur-sm">
