@@ -276,9 +276,10 @@ export default function TvCast() {
         import.meta.env.VITE_APPWRITE_COLLECTION_ID_COMMANDS || "device_commands",
         ID.unique(),
         {
-          command: "unlockDoor",
+          command: "updateDevice",  // Using existing Enum value
           status: "pending",
-          deviceId: "ESP32_DEVICE_01" // Assuming default ID; pull from context if available
+          deviceId: "ESP32_DEVICE_01",
+          memberName: "REMOTE_UNLOCK" // Special flag for ESP32
         }
       );
       toast.success("Remote Unlock Triggered!", { id: toastId });

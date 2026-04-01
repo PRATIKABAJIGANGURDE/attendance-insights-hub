@@ -951,9 +951,14 @@ bool fetchPendingCommand() {
   else if (pendingCmdType == "addAdmin")   emitEvent(EVT_CMD_ADD_ADMIN);
   else if (pendingCmdType == "addMember")  emitEvent(EVT_CMD_ADD_MEMBER);
   else if (pendingCmdType == "updateDevice") {
-    syncMembers();
+    if (pendingMemberName == "REMOTE_UNLOCK") {
+      unlockDoor("Remote Admin");
+      logActivity("system", "Remote unlock triggered", "info");
+    } else {
+      syncMembers();
+      logActivity("system", "Manual sync triggered", "info");
+    }
     completeCommand(pendingCmdId, "completed");
-    logActivity("system", "Manual sync triggered", "info");
     pendingCmdId = ""; pendingCmdType = ""; pendingMemberName = "";
   }
   else if (pendingCmdType == "updateFirmware") {
@@ -977,11 +982,6 @@ bool fetchPendingCommand() {
     completeCommand(pendingCmdId, "completed");
     delay(2000); // Wait for HTTP response to reach backend
     ESP.restart();
-  }
-  else if (pendingCmdType == "unlockDoor") {
-    unlockDoor("Remote Admin");
-    completeCommand(pendingCmdId, "completed");
-    pendingCmdId = ""; pendingCmdType = ""; pendingMemberName = "";
   }
   else {
     Serial.printf("[CMD] Unknown command type: '%s'\n", pendingCmdType.c_str());
