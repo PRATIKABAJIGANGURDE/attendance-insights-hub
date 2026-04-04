@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Users, ClipboardList, Clock, Moon, Sparkles, Volume2, VolumeX, Unlock } from "lucide-react";
+import { Users, ClipboardList, Clock, Moon, Sparkles, Volume2, VolumeX, Unlock, ShieldAlert, ShieldCheck, DoorOpen } from "lucide-react";
 import { databases, client } from "@/lib/appwrite";
 import { Query, ID } from "appwrite";
 import { motion, AnimatePresence } from "framer-motion";
@@ -10,6 +10,7 @@ export default function TvCast() {
   const [members, setMembers] = useState<any[]>([]);
   const [attendance, setAttendance] = useState<any[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
+  const [deviceDoc, setDeviceDoc] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   
   // Timer States
@@ -130,18 +131,20 @@ export default function TvCast() {
       try {
         const dbId = import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db";
 
-        const [membersRes, attendRes, tasksRes] = await Promise.all([
+        const [membersRes, attendRes, tasksRes, deviceRes] = await Promise.all([
           databases.listDocuments(dbId, import.meta.env.VITE_APPWRITE_COLLECTION_ID || "members", [Query.limit(500)]),
           databases.listDocuments(dbId, "attendance", [
             Query.greaterThanEqual("$createdAt", new Date(new Date().setHours(0,0,0,0)).toISOString()),
             Query.limit(200), Query.orderDesc("$createdAt")
           ]),
-          databases.listDocuments(dbId, "club_tasks", [Query.orderDesc("$createdAt"), Query.limit(100)])
+          databases.listDocuments(dbId, "club_tasks", [Query.orderDesc("$createdAt"), Query.limit(100)]),
+          databases.listDocuments(dbId, import.meta.env.VITE_APPWRITE_COLLECTION_ID_DEVICES || "devices", [Query.limit(1)])
         ]);
 
         setMembers(membersRes.documents);
         setAttendance(attendRes.documents);
         setTasks(tasksRes.documents);
+        if (deviceRes.documents.length > 0) setDeviceDoc(deviceRes.documents[0]);
       } catch (err) {
         console.error("Fetch error:", err);
       } finally {
@@ -293,6 +296,40 @@ export default function TvCast() {
     }
   };
 
+  const handleToggleLabLock = async () => {
+    if (!deviceDoc) return;
+    try {
+      const newLocked = !deviceDoc.labLocked;
+      const res = await databases.updateDocument(
+        import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db",
+        import.meta.env.VITE_APPWRITE_COLLECTION_ID_DEVICES || "devices",
+        deviceDoc.$id,
+        { labLocked: newLocked }
+      );
+      setDeviceDoc(res);
+      toast.success(newLocked ? "Lab is now LOCKED" : "Lab Unlocked");
+    } catch (err: any) {
+      toast.error("Failed to toggle global lock");
+    }
+  };
+
+  const handleToggleEventMode = async () => {
+    if (!deviceDoc) return;
+    try {
+      const newEventMode = !deviceDoc.eventMode;
+      const res = await databases.updateDocument(
+        import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db",
+        import.meta.env.VITE_APPWRITE_COLLECTION_ID_DEVICES || "devices",
+        deviceDoc.$id,
+        { eventMode: newEventMode }
+      );
+      setDeviceDoc(res);
+      toast.success(newEventMode ? "Event Mode ON: Door is Open!" : "Event Mode OFF");
+    } catch (err: any) {
+      toast.error("Failed to toggle event mode");
+    }
+  };
+
   // Break Controllers
   const startBreak = (minutes: number) => {
     const end = new Date();
@@ -372,6 +409,32 @@ export default function TvCast() {
             className="h-10 w-10 rounded-xl bg-slate-800/40 border border-slate-700/50 hover:bg-slate-700/80 transition-all backdrop-blur-sm"
           >
             {isMuted ? <VolumeX className="h-5 w-5 text-slate-400" /> : <Volume2 className="h-5 w-5 text-blue-400" />}
+          </Button>
+
+          {/* Event Mode Toggle */}
+          <Button
+            variant="outline"
+            onClick={handleToggleEventMode}
+            className={`h-10 px-4 rounded-xl font-bold uppercase tracking-widest transition-all backdrop-blur-sm 
+              ${deviceDoc?.eventMode 
+                ? "bg-amber-500/20 border-amber-500 text-amber-400 shadow-[0_0_15px_rgba(245,158,11,0.2)]" 
+                : "bg-slate-800/40 border-slate-700/50 text-slate-400 hover:bg-slate-700/80"}`}
+          >
+            <DoorOpen className={`h-4 w-4 mr-2 ${deviceDoc?.eventMode ? "animate-bounce" : ""}`} />
+            {deviceDoc?.eventMode ? "Event Mode ON" : "Event Mode"}
+          </Button>
+
+          {/* Global Lab Lock Toggle */}
+          <Button
+            variant="outline"
+            onClick={handleToggleLabLock}
+            className={`h-10 px-4 rounded-xl font-bold uppercase tracking-widest transition-all backdrop-blur-sm 
+              ${deviceDoc?.labLocked 
+                ? "bg-red-500/20 border-red-500 text-red-500 shadow-[0_0_15px_rgba(239,68,68,0.3)] animate-pulse" 
+                : "bg-slate-800/40 border-slate-700/50 text-slate-400 hover:bg-slate-700/80"}`}
+          >
+            {deviceDoc?.labLocked ? <ShieldAlert className="h-4 w-4 mr-2" /> : <ShieldCheck className="h-4 w-4 mr-2" />}
+            {deviceDoc?.labLocked ? "LAB LOCKED" : "Lab Active"}
           </Button>
           
           <Button

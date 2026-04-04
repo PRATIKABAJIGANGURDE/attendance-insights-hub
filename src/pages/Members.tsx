@@ -186,18 +186,53 @@ export default function Members() {
     }
   };
 
-  const handleDelete = async (memberId: string) => {
+  const handleDelete = async (memberId: string, fingerprintId: string) => {
     if (!window.confirm("Are you sure you want to delete this member?")) return;
+    setLoading(true);
     try {
+      // 1. Send delete command to device to wipe fingerprint from sensor
+      await databases.createDocument(
+        import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db",
+        import.meta.env.VITE_APPWRITE_COLLECTION_ID_COMMANDS || "device_commands",
+        ID.unique(),
+        {
+          command: "deleteMember",
+          status: "pending",
+          memberName: String(fingerprintId), // Pass FP ID to delete
+          deviceId: "ESP32_DEVICE_01"
+        }
+      );
+
+      // 2. Delete cloud DB record
       await databases.deleteDocument(
         import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db",
         import.meta.env.VITE_APPWRITE_COLLECTION_ID || "members",
         memberId
       );
-      toast.success("Member deleted successfully!");
+      toast.success("Member deleted and wipe command sent!");
       setMembersList(membersList.filter((m) => m.$id !== memberId));
     } catch (err: any) {
       toast.error(err.message || "Failed to delete member");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleToggleActive = async (member: any) => {
+    try {
+      const newActive = member.isActive === false ? true : false;
+      await databases.updateDocument(
+        import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db",
+        import.meta.env.VITE_APPWRITE_COLLECTION_ID || "members",
+        member.$id,
+        {
+          isActive: newActive
+        }
+      );
+      toast.success(newActive ? "Member unblocked (Active)!" : "Member blocked!");
+      setMembersList(membersList.map(m => m.$id === member.$id ? { ...m, isActive: newActive } : m));
+    } catch (err: any) {
+      toast.error(err.message || "Failed to update member status");
     }
   };
 
@@ -300,7 +335,10 @@ export default function Members() {
                     <DropdownMenuContent align="end">
                       <DropdownMenuItem onClick={(e) => { e.stopPropagation(); navigate(`/members/${m.$id}`); }}>View Profile</DropdownMenuItem>
                       <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleEditOpen(m); }}>Edit</DropdownMenuItem>
-                      <DropdownMenuItem className="text-destructive" onClick={(e) => { e.stopPropagation(); handleDelete(m.$id); }}>Delete</DropdownMenuItem>
+                      <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleToggleActive(m); }}>
+                        {m.isActive !== false ? "Block User" : "Unblock User"}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem className="text-destructive" onClick={(e) => { e.stopPropagation(); handleDelete(m.$id, m.fingerprintId); }}>Delete</DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </td>

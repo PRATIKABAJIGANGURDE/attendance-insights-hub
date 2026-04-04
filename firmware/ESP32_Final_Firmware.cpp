@@ -7,7 +7,7 @@
  * ║  Backend  : Appwrite Cloud                                  ║
  * ║  Tables   : members, attendance, devices,                   ║
  * ║             device_commands, activity_events                ║
- * ║  Version  : 3.0.2                                           ║
+ * ║  Version  : 4.0.0                                           ║
  * ╚══════════════════════════════════════════════════════════════╝
  *
  *  CHANGES FROM v3.0.1
@@ -76,7 +76,7 @@
 
 // ─── Limits ─────────────────────────────────────────────────────
 #define EEPROM_SIZE             512
-#define EEPROM_MAGIC           0xBC   // Bumped — forces fresh cache on upgrade
+#define EEPROM_MAGIC           0xBD   // Bumped — forces fresh cache on upgrade, added isActive
 #define MAX_CACHE_ENTRIES        50   // LRU cap on roleCache
 #define MAX_QUEUE_ENTRIES        20   // Offline attendance queue depth
 #define MAX_NAME_LEN             20
@@ -119,6 +119,7 @@ enum AwResult { AW_OK = 0, AW_NO_WIFI, AW_HTTP_ERR, AW_PARSE_ERR };
 // ════════════════════════════════════════════════════════════════
 struct CacheEntry {
   uint8_t role;
+  bool    isActive;
   char    name[MAX_NAME_LEN + 1];
 };
 
@@ -153,6 +154,8 @@ String   pendingCmdId;
 String   pendingCmdType;
 String   pendingMemberName;
 uint16_t verifiedAdminId      = 0;
+bool     g_labLocked          = false;
+bool     g_eventMode          = false;
 
 // ─── Offline queue ──────────────────────────────────────────────
 std::vector<QueuedAttendance>  attendanceQueue;
@@ -337,7 +340,7 @@ void loop() {
   }
 
   // ─── Touch detection (rising edge) ──────────────────────────
-  if (currentState == STATE_IDLE) {
+  if (currentState == STATE_IDLE && !g_eventMode) {
     bool hi = (digitalRead(TOUCH_PIN) == HIGH);
     if (hi && !touchWasHigh) emitEvent(EVT_TOUCH_DETECTED);
     else if (!hi && fps.getImage() == FINGERPRINT_OK) emitEvent(EVT_TOUCH_DETECTED);
@@ -350,7 +353,7 @@ void loop() {
   lastInsideTouchState = insideTouch;
 
   // ─── Non-blocking door re-lock ──────────────────────────────
-  if (unlockEndTime > 0 && now > unlockEndTime) {
+  if (!g_eventMode && unlockEndTime > 0 && now > unlockEndTime) {
     digitalWrite(LOCK_PIN, LOW);
     unlockEndTime = 0;
     Serial.println(F("[DOOR] Locked"));
@@ -428,12 +431,32 @@ void handleState() {
 
         const char* name = "Unknown";
         Role        role = ROLE_MEMBER;
+        bool        isActive = true;
         if (roleCache.count(id)) {
           name = roleCache[id].name;
           role = (Role)roleCache[id].role;
+          isActive = roleCache[id].isActive;
         }
 
         Serial.printf("[ATTEND] ID %d — %s (%s)\n", id, name, roleStr(role));
+
+        // --- ACCESS CONTROL OVERRIDES ---
+        if (g_labLocked && role != ROLE_SUPER_ADMIN) {
+          lcdShow("ACCESS DENIED", "LAB LOCKED");
+          logActivity("attendance", "Scan denied: Lab Locked", "warning", id);
+          delay(2000);
+          transitionTo(STATE_IDLE);
+          return;
+        }
+
+        if (!isActive) {
+          lcdShow("ACCESS DENIED", "Account Blocked");
+          logActivity("attendance", "Scan denied: Account Blocked", "error", id);
+          delay(2000);
+          transitionTo(STATE_IDLE);
+          return;
+        }
+
         unlockDoor("Fingerprint");
 
         lcdShow((role == ROLE_SUPER_ADMIN || role == ROLE_ADMIN)
@@ -629,7 +652,12 @@ void transitionTo(SystemState s) {
   enrollStart  = millis();
   switch (s) {
     case STATE_IDLE:
-      if (unlockEndTime == 0) lcdShow("ASGS System", "Touch to Scan");
+      if (g_eventMode) {
+        digitalWrite(LOCK_PIN, HIGH); // keep door open physically
+        lcdShow("Event Mode: OPEN", "Welcome Guests!");
+      } else {
+        if (unlockEndTime == 0) lcdShow("ASGS System", "Touch to Scan");
+      }
       break;
     case STATE_ATTENDANCE_SCAN:   lcdShow("Scan Finger",    "Place on sensor"); break;
     case STATE_SUPER_ADMIN_SETUP: lcdShow("Setup SuperAdm", "Place Finger");    break;
@@ -876,6 +904,7 @@ void syncMembers() {
     evictCacheIfFull();
     CacheEntry e;
     e.role = (uint8_t)roleFromStr(m["role"] | "member");
+    e.isActive = m["isActive"] | true;
     strncpy(e.name, m["name"] | "Unknown", MAX_NAME_LEN);
     e.name[MAX_NAME_LEN] = '\0';
     roleCache[fpId] = e;
@@ -957,6 +986,17 @@ bool fetchPendingCommand() {
     } else {
       syncMembers();
       logActivity("system", "Manual sync triggered", "info");
+    }
+    completeCommand(pendingCmdId, "completed");
+    pendingCmdId = ""; pendingCmdType = ""; pendingMemberName = "";
+  }
+  else if (pendingCmdType == "deleteMember") {
+    uint16_t fpId = pendingMemberName.toInt();
+    if (fpId > 0) {
+      fps.deleteModel(fpId);
+      roleCache.erase(fpId);
+      saveCache();
+      logActivity("system", "Member deleted from device", "warning", fpId);
     }
     completeCommand(pendingCmdId, "completed");
     pendingCmdId = ""; pendingCmdType = ""; pendingMemberName = "";
@@ -1092,7 +1132,12 @@ void upsertDeviceStatus(const char* status) {
       DynamicJsonDocument doc(1024);
       if (deserializeJson(doc, body) == DeserializationError::Ok) {
         JsonArray arr = doc["documents"].as<JsonArray>();
-        if (arr.size()) deviceDocId = arr[0]["$id"] | "";
+        if (arr.size()) {
+          JsonObject dObj = arr[0];
+          deviceDocId = dObj["$id"] | "";
+          g_labLocked = dObj["labLocked"] | false;
+          g_eventMode = dObj["eventMode"] | false;
+        }
       }
     }
   }
@@ -1146,6 +1191,7 @@ void saveCache() {
     EEPROM.write(addr++, (kv.first >> 8) & 0xFF);
     EEPROM.write(addr++, kv.first & 0xFF);
     EEPROM.write(addr++, kv.second.role);
+    EEPROM.write(addr++, kv.second.isActive ? 1 : 0);
     uint8_t nl = (uint8_t)strnlen(kv.second.name, MAX_NAME_LEN);
     EEPROM.write(addr++, nl);
     for (int i = 0; i < nl; i++) EEPROM.write(addr++, kv.second.name[i]);
@@ -1163,8 +1209,9 @@ void loadCache() {
   for (int i = 0; i < count && addr + 4 < EEPROM_SIZE; i++) {
     uint16_t id  = ((uint16_t)EEPROM.read(addr++) << 8) | EEPROM.read(addr++);
     uint8_t  rl  = EEPROM.read(addr++);
+    uint8_t  act = EEPROM.read(addr++);
     uint8_t  nl  = EEPROM.read(addr++);
-    CacheEntry e; e.role = rl; memset(e.name, 0, sizeof(e.name));
+    CacheEntry e; e.role = rl; e.isActive = (act == 1); memset(e.name, 0, sizeof(e.name));
     uint8_t readLen = min((int)nl, MAX_NAME_LEN);
     for (int j = 0; j < readLen && addr < EEPROM_SIZE; j++)
       e.name[j] = (char)EEPROM.read(addr++);
