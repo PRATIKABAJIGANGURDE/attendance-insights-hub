@@ -654,7 +654,9 @@ void transitionTo(SystemState s) {
     case STATE_IDLE:
       if (g_eventMode) {
         digitalWrite(LOCK_PIN, HIGH); // keep door open physically
-        lcdShow("Event Mode: OPEN", "Welcome Guests!");
+        lcdShow("Welcome", "");
+      } else if (g_labLocked) {
+        if (unlockEndTime == 0) lcdShow("LAB IS LOCKED", "BY ADMIN");
       } else {
         if (unlockEndTime == 0) lcdShow("ASGS System", "Touch to Scan");
       }
@@ -983,8 +985,12 @@ bool fetchPendingCommand() {
     if (pendingMemberName == "REMOTE_UNLOCK") {
       unlockDoor("Remote Admin");
       logActivity("system", "Remote unlock triggered", "info");
+    } else if (pendingMemberName == "SYNC_STATUS") {
+      syncDeviceState();
+      logActivity("system", "Status sync triggered", "info");
     } else {
       syncMembers();
+      syncDeviceState();
       logActivity("system", "Manual sync triggered", "info");
     }
     completeCommand(pendingCmdId, "completed");
@@ -1002,6 +1008,11 @@ bool fetchPendingCommand() {
     pendingCmdId = ""; pendingCmdType = ""; pendingMemberName = "";
   }
   else if (pendingCmdType == "updateFirmware") {
+    // 🔥 Mark as COMPLETED before doing ANY downloading.
+    // If the download fails, the user can just push the button again.
+    // This 100% prevents bootloops if the WiFi crashes during flashing.
+    completeCommand(pendingCmdId, "completed");
+    
     logActivity("system", "OTA update started", "warning");
     lcdShow("Downloading...", "Firmware Update");
     performOTA(pendingMemberName);   // memberName field carries the fileId
@@ -1084,13 +1095,11 @@ void performOTA(const String& fileId) {
   http.end();
 
   if (otaSuccess) {
-    completeCommand(pendingCmdId, "completed");
     lcdShow("OTA Success!", "Restarting...");
     delay(2000);
     ESP.restart();
   } else {
     lcdShow("OTA Failed!", ("HTTP " + String(code)).c_str());
-    completeCommand(pendingCmdId, "failed");
     logActivity("system", ("OTA failed HTTP=" + String(code)).c_str(), "error");
   }
 
@@ -1116,6 +1125,30 @@ void logActivity(const char* eventType, const char* message,
   awPost(AW_COL_ACTIVITY, payload);
 }
 
+void syncDeviceState() {
+  String q    = buildQuery("deviceId", DEVICE_ID) + "&" + buildLimitQuery(1);
+  String body = awGetList(AW_COL_DEVICES, q);
+  if (body.length()) {
+    DynamicJsonDocument doc(1024);
+    if (deserializeJson(doc, body) == DeserializationError::Ok) {
+      JsonArray arr = doc["documents"].as<JsonArray>();
+      if (arr.size()) {
+        JsonObject dObj = arr[0];
+        deviceDocId = dObj["$id"] | "";
+        bool newLocked = dObj["labLocked"] | false;
+        bool newEvent  = dObj["eventMode"] | false;
+        
+        if (newLocked != g_labLocked || newEvent != g_eventMode) {
+          g_labLocked = newLocked;
+          g_eventMode = newEvent;
+          // Refresh screen if sitting idle
+          if (currentState == STATE_IDLE) transitionTo(STATE_IDLE);
+        }
+      }
+    }
+  }
+}
+
 void upsertDeviceStatus(const char* status) {
   if (WiFi.status() != WL_CONNECTED) return;
 
@@ -1126,20 +1159,7 @@ void upsertDeviceStatus(const char* status) {
 
   // Look up device doc ID once and cache it
   if (!deviceDocId.length()) {
-    String q    = buildQuery("deviceId", DEVICE_ID) + "&" + buildLimitQuery(1);
-    String body = awGetList(AW_COL_DEVICES, q);
-    if (body.length()) {
-      DynamicJsonDocument doc(1024);
-      if (deserializeJson(doc, body) == DeserializationError::Ok) {
-        JsonArray arr = doc["documents"].as<JsonArray>();
-        if (arr.size()) {
-          JsonObject dObj = arr[0];
-          deviceDocId = dObj["$id"] | "";
-          g_labLocked = dObj["labLocked"] | false;
-          g_eventMode = dObj["eventMode"] | false;
-        }
-      }
-    }
+    syncDeviceState();
   }
 
   if (g_wdt_enabled) esp_task_wdt_reset();

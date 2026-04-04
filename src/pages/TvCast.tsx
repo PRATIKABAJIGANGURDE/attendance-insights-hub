@@ -304,12 +304,29 @@ export default function TvCast() {
         import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db",
         import.meta.env.VITE_APPWRITE_COLLECTION_ID_DEVICES || "devices",
         deviceDoc.$id,
-        { labLocked: newLocked }
+        { 
+          labLocked: newLocked,
+          ...(newLocked && { eventMode: false }) // Event Mode and Lab Lock are mutually exclusive
+        }
       );
+      // Tell device to sync immediately
+      await databases.createDocument(
+        import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db",
+        import.meta.env.VITE_APPWRITE_COLLECTION_ID_COMMANDS || "device_commands",
+        ID.unique(),
+        {
+          command: "updateDevice",
+          status: "pending",
+          deviceId: "ESP32_DEVICE_01",
+          memberName: "SYNC_STATUS"
+        }
+      );
+
       setDeviceDoc(res);
       toast.success(newLocked ? "Lab is now LOCKED" : "Lab Unlocked");
     } catch (err: any) {
-      toast.error("Failed to toggle global lock");
+      toast.error("Failed to toggle global lock", { description: err.message });
+      console.error(err);
     }
   };
 
@@ -321,12 +338,29 @@ export default function TvCast() {
         import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db",
         import.meta.env.VITE_APPWRITE_COLLECTION_ID_DEVICES || "devices",
         deviceDoc.$id,
-        { eventMode: newEventMode }
+        { 
+          eventMode: newEventMode,
+          ...(newEventMode && { labLocked: false }) // Mutually exclusive
+        }
       );
+      // Tell device to sync immediately
+      await databases.createDocument(
+        import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db",
+        import.meta.env.VITE_APPWRITE_COLLECTION_ID_COMMANDS || "device_commands",
+        ID.unique(),
+        {
+          command: "updateDevice",
+          status: "pending",
+          deviceId: "ESP32_DEVICE_01",
+          memberName: "SYNC_STATUS"
+        }
+      );
+
       setDeviceDoc(res);
       toast.success(newEventMode ? "Event Mode ON: Door is Open!" : "Event Mode OFF");
     } catch (err: any) {
-      toast.error("Failed to toggle event mode");
+      toast.error("Failed to toggle event mode", { description: err.message });
+      console.error(err);
     }
   };
 
