@@ -143,8 +143,8 @@ export default function TvCast() {
     }
 
     try {
-      console.log(`[TTS] Generating welcome for: ${name}`);
-      const response = await fetch("https://api.inworld.ai/tts/v1/voice:generate", {
+      console.log(`[TTS] Requesting synthesis for: ${name}`);
+      const response = await fetch("https://api.inworld.ai/tts/v1/voice", {
         method: "POST",
         headers: { 
           "Content-Type": "application/json", 
@@ -168,16 +168,18 @@ export default function TvCast() {
 
       const data = await response.json();
       if (!data.audioContent) {
-        console.warn("[TTS] No audioContent in API response");
+        console.warn("[TTS] No audioContent in API response", data);
         return;
       }
 
-      console.log("[TTS] Audio received, playing back...");
+      console.log(`[TTS] Success: Received ${Math.round(data.audioContent.length * 0.75)} bytes of audio`);
+      console.log("[TTS] Playing back...");
       const audio = new Audio(`data:audio/mp3;base64,${data.audioContent}`);
       await audio.play();
     } catch (err) {
-      console.error("[TTS] Error:", err);
+      console.error("[TTS] Execution error:", err);
     }
+
   };
 
 
