@@ -137,21 +137,49 @@ export default function TvCast() {
     if (!audioEnabled || isMuted) return;
     const apiKey = import.meta.env.VITE_INWORLD_API_KEY;
     const voiceId = import.meta.env.VITE_INWORLD_VOICE_ID || "Ashley";
-    if (!apiKey) return;
+    if (!apiKey) {
+      console.warn("[TTS] No Inworld API key found");
+      return;
+    }
+
     try {
-      const response = await fetch("https://api.inworld.ai/tts/v1/voice", {
+      console.log(`[TTS] Generating welcome for: ${name}`);
+      const response = await fetch("https://api.inworld.ai/tts/v1/voice:generate", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": apiKey.startsWith("Basic ") ? apiKey : `Basic ${apiKey}` },
-        body: JSON.stringify({ text: `Welcome back, ${name}. ${quote}`, voiceId, modelId: "inworld-tts-1.5-max" })
+        headers: { 
+          "Content-Type": "application/json", 
+          "Authorization": apiKey.startsWith("Basic ") ? apiKey : `Basic ${apiKey}` 
+        },
+        body: JSON.stringify({ 
+          text: `Welcome back, ${name}. ${quote}`, 
+          voiceId, 
+          modelId: "inworld-tts-1.5-max",
+          audioConfig: {
+            audioEncoding: "MP3"
+          }
+        })
       });
-      if (!response.ok) return;
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[TTS] API error: ${response.status}`, errorText);
+        return;
+      }
+
       const data = await response.json();
-      if (!data.audioContent) return;
-      const audioBlob = await (await fetch(`data:audio/mp3;base64,${data.audioContent}`)).blob();
-      const audio = new Audio(URL.createObjectURL(audioBlob));
+      if (!data.audioContent) {
+        console.warn("[TTS] No audioContent in API response");
+        return;
+      }
+
+      console.log("[TTS] Audio received, playing back...");
+      const audio = new Audio(`data:audio/mp3;base64,${data.audioContent}`);
       await audio.play();
-    } catch (_) {}
+    } catch (err) {
+      console.error("[TTS] Error:", err);
+    }
   };
+
 
   const triggerWelcome = (name: string) => {
     if (welcomeTimeoutRef.current) clearTimeout(welcomeTimeoutRef.current);
