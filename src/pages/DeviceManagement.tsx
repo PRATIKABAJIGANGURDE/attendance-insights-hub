@@ -9,6 +9,7 @@ import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { databases, storage } from "@/lib/appwrite";
 import { ID } from "appwrite";
+import SparkMD5 from "spark-md5";
 import {
   Dialog,
   DialogContent,
@@ -176,15 +177,33 @@ export default function DeviceManagement() {
     }
 
     setUploading(true);
-    const toastId = toast.loading("Uploading firmware to cloud...");
+    const toastId = toast.loading("Generating MD5 verification hash...");
+    
     try {
+      // 0. Compute MD5 Hash
+      const fileHash = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          if (event.target?.result instanceof ArrayBuffer) {
+            const spark = new SparkMD5.ArrayBuffer();
+            spark.append(event.target.result);
+            resolve(spark.end());
+          } else {
+            reject(new Error("Invalid file buffer"));
+          }
+        };
+        reader.onerror = () => reject(new Error("File read error"));
+        reader.readAsArrayBuffer(file);
+      });
+
       // 1. Upload to Appwrite Storage
+      toast.loading(`Uploading (MD5: ${fileHash.substring(0,6)}...)...`, { id: toastId });
       const bucketId = import.meta.env.VITE_APPWRITE_FIRMWARE_BUCKET || "firmware_updates";
       const uploadedFile = await storage.createFile(bucketId, ID.unique(), file);
 
-      toast.loading("Dispatching OTA command to ESP32...", { id: toastId });
+      toast.loading("Dispatching secure OTA command...", { id: toastId });
 
-      // 2. Dispatch command to device
+      // 2. Dispatch secure command to device
       await databases.createDocument(
         import.meta.env.VITE_APPWRITE_DATABASE_ID || "main_db",
         import.meta.env.VITE_APPWRITE_COLLECTION_ID_COMMANDS || "device_commands",
@@ -193,7 +212,7 @@ export default function DeviceManagement() {
           command: "updateFirmware",
           status: "pending",
           deviceId: deviceData.deviceId,
-          memberName: uploadedFile.$id // Repurposing memberName to pass the file ID
+          memberName: `${uploadedFile.$id}|${fileHash}` // Append MD5 hash for ESP32 verification
         }
       );
 

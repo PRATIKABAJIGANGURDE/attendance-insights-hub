@@ -30,11 +30,11 @@
 #include <LiquidCrystal_I2C.h>
 #include <Adafruit_Fingerprint.h>
 #include <EEPROM.h>
-#include <map>
-#include <vector>
 #include <WiFiManager.h>
 #include <Preferences.h>
 #include <Update.h>
+#include <WiFiClientSecure.h>
+#include "certs.h"
 #include <esp_task_wdt.h>    // Watchdog
 #include <time.h>            // NTP real timestamps
 
@@ -129,6 +129,11 @@ struct QueuedAttendance {
   char     iso[26];   // "2025-01-15T10:30:00+00:00\0"
 };
 
+struct ScanRec {
+  int16_t  id;
+  uint32_t ts;
+};
+
 // ════════════════════════════════════════════════════════════════
 //  GLOBALS
 // ════════════════════════════════════════════════════════════════
@@ -145,9 +150,56 @@ static char g_api_key[300]    = "";
 SystemState  currentState      = STATE_BOOT;
 SystemEvent  pendingEvent      = EVT_NONE;
 
-// ─── Role cache (LRU: insertion-order map + size cap) ───────────
-std::map<uint16_t, CacheEntry> roleCache;
-std::map<uint16_t, uint32_t>   lastScanTime;
+// ─── Role cache (LRU: insertion-order array + size cap) ───────────
+CacheEntry roleCache[MAX_CACHE_ENTRIES];
+uint16_t   roleCacheKeys[MAX_CACHE_ENTRIES];
+uint8_t    roleCacheSize = 0;
+
+ScanRec    recentScans[20];
+uint8_t    recentScanIdx = 0;
+
+CacheEntry* getRoleCache(uint16_t id) {
+  for (int i = 0; i < roleCacheSize; i++) {
+    if (roleCacheKeys[i] == id) return &roleCache[i];
+  }
+  return nullptr;
+}
+
+void setRoleCache(uint16_t id, CacheEntry e) {
+  CacheEntry* existing = getRoleCache(id);
+  if (existing) {
+    *existing = e;
+  } else {
+    // Evict oldest if full by shifting left
+    if (roleCacheSize >= MAX_CACHE_ENTRIES) {
+      for (int i = 1; i < MAX_CACHE_ENTRIES; i++) {
+        roleCacheKeys[i - 1] = roleCacheKeys[i];
+        roleCache[i - 1] = roleCache[i];
+      }
+      roleCacheSize--;
+    }
+    roleCacheKeys[roleCacheSize] = id;
+    roleCache[roleCacheSize] = e;
+    roleCacheSize++;
+  }
+}
+
+void removeRoleCache(uint16_t id) {
+  for (int i = 0; i < roleCacheSize; i++) {
+    if (roleCacheKeys[i] == id) {
+      for (int j = i; j < roleCacheSize - 1; j++) {
+        roleCacheKeys[j] = roleCacheKeys[j + 1];
+        roleCache[j] = roleCache[j + 1];
+      }
+      roleCacheSize--;
+      return;
+    }
+  }
+}
+
+void clearRoleCache() {
+  roleCacheSize = 0;
+}
 
 // ─── Command context ────────────────────────────────────────────
 String   pendingCmdId;
@@ -340,7 +392,7 @@ void loop() {
   }
 
   // ─── Touch detection (rising edge) ──────────────────────────
-  if (currentState == STATE_IDLE && !g_eventMode) {
+  if (currentState == STATE_IDLE) {
     bool hi = (digitalRead(TOUCH_PIN) == HIGH);
     if (hi && !touchWasHigh) emitEvent(EVT_TOUCH_DETECTED);
     else if (!hi && fps.getImage() == FINGERPRINT_OK) emitEvent(EVT_TOUCH_DETECTED);
@@ -357,7 +409,12 @@ void loop() {
     digitalWrite(LOCK_PIN, LOW);
     unlockEndTime = 0;
     Serial.println(F("[DOOR] Locked"));
-    if (currentState == STATE_IDLE) lcdShow("ASGS System", "Touch to Scan");
+    
+    // Restore the correct idle screen
+    if (currentState == STATE_IDLE) {
+        if (g_labLocked) lcdShow("LAB IS CLOSED", "");
+        else lcdShow("ASGS System", "Touch to Scan");
+    }
   }
 
   // ─── Action timeout ─────────────────────────────────────────
@@ -403,7 +460,17 @@ void handleState() {
 
     // ── IDLE ───────────────────────────────────────────────────
     case STATE_IDLE:
-      if      (pendingEvent == EVT_TOUCH_DETECTED)  { pendingEvent = EVT_NONE; transitionTo(STATE_ATTENDANCE_SCAN); }
+      if (pendingEvent == EVT_TOUCH_DETECTED) {
+        pendingEvent = EVT_NONE;
+        if (g_labLocked) {
+          lcdShow("ACCESS DENIED", "LAB IS CLOSED");
+          logActivity("system", "Blocked touch: Lab Closed", "warning");
+          delay(2000);
+          transitionTo(STATE_IDLE);
+        } else {
+          transitionTo(STATE_ATTENDANCE_SCAN);
+        }
+      }
       else if (pendingEvent == EVT_CMD_SETUP_ADMIN) { pendingEvent = EVT_NONE; transitionTo(STATE_SUPER_ADMIN_SETUP); }
       else if (pendingEvent == EVT_CMD_ADD_ADMIN ||
                pendingEvent == EVT_CMD_ADD_MEMBER)  { pendingEvent = EVT_NONE; transitionTo(STATE_ADMIN_VERIFY); }
@@ -417,25 +484,33 @@ void handleState() {
       if (id > 0) {
         uint32_t now = millis();
 
-        if (lastScanTime.count(id) && now - lastScanTime[id] < ANTI_SPAM_MS) {
-          uint32_t waitSec = (ANTI_SPAM_MS - (now - lastScanTime[id])) / 1000 + 1;
-          lcdShow("Already Scanned!", ("Wait " + String(waitSec) + "s").c_str());
-          Serial.printf("[ATTEND] Anti-spam: ID %d (%lus left)\n", id, waitSec);
-          delay(1500);
-          transitionTo(STATE_IDLE);
-          return;
+        bool isSpam = false;
+        for (int i = 0; i < 20; i++) {
+          if (recentScans[i].id == id && now - recentScans[i].ts < ANTI_SPAM_MS) {
+            isSpam = true;
+            uint32_t waitSec = (ANTI_SPAM_MS - (now - recentScans[i].ts)) / 1000 + 1;
+            lcdShow("Already Scanned!", ("Wait " + String(waitSec) + "s").c_str());
+            Serial.printf("[ATTEND] Anti-spam: ID %d (%lus left)\n", id, waitSec);
+            delay(1500);
+            transitionTo(STATE_IDLE);
+            return;
+          }
         }
 
-        lastScanTime[id] = now;
+        recentScans[recentScanIdx].id = id;
+        recentScans[recentScanIdx].ts = now;
+        recentScanIdx = (recentScanIdx + 1) % 20;
         totalScansToday++;
 
         const char* name = "Unknown";
         Role        role = ROLE_MEMBER;
         bool        isActive = true;
-        if (roleCache.count(id)) {
-          name = roleCache[id].name;
-          role = (Role)roleCache[id].role;
-          isActive = roleCache[id].isActive;
+        
+        CacheEntry* ce = getRoleCache(id);
+        if (ce) {
+          name = ce->name;
+          role = (Role)ce->role;
+          isActive = ce->isActive;
         }
 
         Serial.printf("[ATTEND] ID %d — %s (%s)\n", id, name, roleStr(role));
@@ -459,10 +534,8 @@ void handleState() {
 
         unlockDoor("Fingerprint");
 
-        lcdShow((role == ROLE_SUPER_ADMIN || role == ROLE_ADMIN)
-                ? "Welcome Admin!" : "Welcome!", name);
-        delay(800);
-        lcdShow(name, "Opening...");
+        lcdShow("Welcome", name);
+        delay(1500);
 
         // Get real timestamp once for both attendance record & activity log
         char iso[26];
@@ -503,9 +576,9 @@ void handleState() {
 
       if (enrollFinger(newId)) {
         evictCacheIfFull();
-        CacheEntry e; e.role = ROLE_SUPER_ADMIN;
+        CacheEntry e; e.role = ROLE_SUPER_ADMIN; e.isActive = true;
         strncpy(e.name, "Super Admin", MAX_NAME_LEN);
-        roleCache[newId] = e;
+        setRoleCache(newId, e);
         saveCache();
         registerMember(newId, "Super Admin", "super_admin");
         completeCommand(pendingCmdId, "completed");
@@ -530,14 +603,15 @@ void handleState() {
       lcdShow(needSuper ? "SuperAdmin Scan" : "Admin Scan", "Verify to proceed");
 
       int16_t id = identifyFinger();
-      if (id > 0 && roleCache.count(id)) {
-        Role r  = (Role)roleCache[id].role;
+      if (id > 0 && getRoleCache(id) != nullptr) {
+        CacheEntry* ce = getRoleCache(id);
+        Role r  = (Role)ce->role;
         bool ok = needSuper ? (r == ROLE_SUPER_ADMIN)
                             : (r == ROLE_ADMIN || r == ROLE_SUPER_ADMIN);
         if (ok) {
           verifiedAdminId = id;
-          lcdShow("Verified!", roleCache[id].name);
-          Serial.printf("[AUTH] Authorized by '%s' (ID %d)\n", roleCache[id].name, id);
+          lcdShow("Verified!", ce->name);
+          Serial.printf("[AUTH] Authorized by '%s' (ID %d)\n", ce->name, id);
           delay(1500);
           transitionTo(needSuper ? STATE_ADMIN_ADD_MODE : STATE_MEMBER_ENROLL);
         } else {
@@ -571,7 +645,7 @@ void handleState() {
         evictCacheIfFull();
         CacheEntry e; e.role = ROLE_ADMIN;
         strncpy(e.name, name.c_str(), MAX_NAME_LEN);
-        roleCache[newId] = e;
+        setRoleCache(newId, e);
         saveCache();
         registerMember(newId, name.c_str(), "admin");
         completeCommand(pendingCmdId, "completed");
@@ -602,7 +676,7 @@ void handleState() {
         evictCacheIfFull();
         CacheEntry e; e.role = ROLE_MEMBER;
         strncpy(e.name, name.c_str(), MAX_NAME_LEN);
-        roleCache[newId] = e;
+        setRoleCache(newId, e);
         saveCache();
         registerMember(newId, name.c_str(), "member");
         completeCommand(pendingCmdId, "completed");
@@ -639,8 +713,12 @@ void unlockDoor(const char* triggerSource) {
   digitalWrite(LOCK_PIN, HIGH);   // Magnet OFF → door unlocked
   unlockEndTime = millis() + DOOR_UNLOCK_MS;
   Serial.printf("[DOOR] Unlocked by %s\n", triggerSource);
-  if (strcmp(triggerSource, "Inside Touch") == 0)
-    lcdShow("Door Unlocked", "Opening...");
+  
+  // Do not alter LCD if the lab is intentionally closed/locked
+  if (!g_labLocked) {
+    if (strcmp(triggerSource, "Inside Touch") == 0)
+      lcdShow("Door Unlocked", "Opening...");
+  }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -653,12 +731,18 @@ void transitionTo(SystemState s) {
   switch (s) {
     case STATE_IDLE:
       if (g_eventMode) {
-        digitalWrite(LOCK_PIN, HIGH); // keep door open physically
-        lcdShow("Welcome", "");
+        digitalWrite(LOCK_PIN, HIGH); // Force unlock relay
+        lcdShow("Welcome to ASGS", "");
       } else if (g_labLocked) {
-        if (unlockEndTime == 0) lcdShow("LAB IS LOCKED", "BY ADMIN");
+        if (unlockEndTime == 0) {
+          digitalWrite(LOCK_PIN, LOW); // Force lock relay
+          lcdShow("LAB IS CLOSED", "");
+        }
       } else {
-        if (unlockEndTime == 0) lcdShow("ASGS System", "Touch to Scan");
+        if (unlockEndTime == 0) {
+          digitalWrite(LOCK_PIN, LOW); // Normal security relay
+          lcdShow("ASGS System", "Touch to Scan");
+        }
       }
       break;
     case STATE_ATTENDANCE_SCAN:   lcdShow("Scan Finger",    "Place on sensor"); break;
@@ -809,9 +893,11 @@ void awHeaders(HTTPClient& h) {
 
 AwResult awPost(const char* col, const char* payload, String* outDocId) {
   if (WiFi.status() != WL_CONNECTED) return AW_NO_WIFI;
+  WiFiClientSecure client;
+  client.setCACert(rootCACertificate);
   HTTPClient http;
   char url[256]; buildURL(url, sizeof(url), col);
-  http.begin(url);
+  http.begin(client, url);
   awHeaders(http);
   int code = http.POST((uint8_t*)payload, strlen(payload));
   if (code == 201 && outDocId) *outDocId = http.getString();
@@ -825,10 +911,12 @@ AwResult awPost(const char* col, const char* payload, String* outDocId) {
 
 AwResult awPatch(const char* col, const char* docId, const char* payload) {
   if (WiFi.status() != WL_CONNECTED) return AW_NO_WIFI;
+  WiFiClientSecure client;
+  client.setCACert(rootCACertificate);
   HTTPClient http;
   char path[130]; snprintf(path, sizeof(path), "/%s", docId);
   char url[256];  buildURL(url, sizeof(url), col, path);
-  http.begin(url);
+  http.begin(client, url);
   awHeaders(http);
   int code = http.sendRequest("PATCH", (uint8_t*)payload, strlen(payload));
   http.end();
@@ -841,10 +929,12 @@ AwResult awPatch(const char* col, const char* docId, const char* payload) {
 
 String awGetList(const char* col, const String& query) {
   if (WiFi.status() != WL_CONNECTED) return "";
+  WiFiClientSecure client;
+  client.setCACert(rootCACertificate);
   HTTPClient http;
   char base[256]; buildURL(base, sizeof(base), col);
   String url = String(base) + (query.length() ? "?" + query : "");
-  http.begin(url);
+  http.begin(client, url);
   awHeaders(http);
   int code = http.GET();
   String body = (code == 200) ? http.getString() : "";
@@ -889,7 +979,8 @@ String buildLimitQuery(int n) {
 
 void syncMembers() {
   Serial.println(F("[SYNC] Fetching members..."));
-  String body = awGetList(AW_COL_MEMBERS);
+  String query = buildLimitQuery(100);
+  String body = awGetList(AW_COL_MEMBERS, query);
   if (!body.length()) return;
 
   DynamicJsonDocument doc(8192);
@@ -909,7 +1000,7 @@ void syncMembers() {
     e.isActive = m["isActive"] | true;
     strncpy(e.name, m["name"] | "Unknown", MAX_NAME_LEN);
     e.name[MAX_NAME_LEN] = '\0';
-    roleCache[fpId] = e;
+    setRoleCache(fpId, e);
     loaded++;
   }
   saveCache();
@@ -1000,7 +1091,7 @@ bool fetchPendingCommand() {
     uint16_t fpId = pendingMemberName.toInt();
     if (fpId > 0) {
       fps.deleteModel(fpId);
-      roleCache.erase(fpId);
+      removeRoleCache(fpId);
       saveCache();
       logActivity("system", "Member deleted from device", "warning", fpId);
     }
@@ -1022,7 +1113,7 @@ bool fetchPendingCommand() {
       logActivity("system", "Wiping fingerprint DB", "warning");
       lcdShow("Wiping DB...", "Please Wait");
       fps.emptyDatabase();
-      roleCache.clear();
+      clearRoleCache();
       EEPROM.write(0, 0x00);  // Invalidate magic — forces fresh cache on reboot
       EEPROM.commit();
     } else {
@@ -1053,19 +1144,30 @@ bool completeCommand(const String& id, const String& status) {
   return r == AW_OK;
 }
 
-void performOTA(const String& fileId) {
+void performOTA(const String& payloadStr) {
   if (WiFi.status() != WL_CONNECTED) {
     completeCommand(pendingCmdId, "failed");
     pendingCmdId = ""; pendingCmdType = ""; pendingMemberName = "";
     return;
   }
 
+  String fileId = payloadStr;
+  String md5Hash = "";
+  int split = payloadStr.indexOf('|');
+  if (split > 0) {
+    fileId = payloadStr.substring(0, split);
+    md5Hash = payloadStr.substring(split + 1);
+  }
+
   lcdShow("OTA Update", "Downloading...");
+  WiFiClientSecure client;
+  client.setCACert(rootCACertificate);
   HTTPClient http;
+  
   char url[300];
   snprintf(url, sizeof(url), "%s/storage/buckets/%s/files/%s/download",
            AW_ENDPOINT, AW_FIRMWARE_BUCKET, fileId.c_str());
-  http.begin(url);
+  http.begin(client, url);
   awHeaders(http);
 
   int code = http.GET();
@@ -1074,6 +1176,9 @@ void performOTA(const String& fileId) {
   if (code == 200) {
     int len = http.getSize();
     if (Update.begin(len > 0 ? len : UPDATE_SIZE_UNKNOWN)) {
+      if (md5Hash.length() == 32) {
+        Update.setMD5(md5Hash.c_str());
+      }
       lcdShow("OTA Update", "Flashing...");
       WiFiClient* stream = http.getStreamPtr();
       size_t written = Update.writeStream(*stream);
@@ -1193,9 +1298,8 @@ void upsertDeviceStatus(const char* status) {
 //  CACHE — EEPROM PERSISTENCE WITH LRU CAP
 // ════════════════════════════════════════════════════════════════
 void evictCacheIfFull() {
-  if (roleCache.size() >= MAX_CACHE_ENTRIES) {
-    // Evict the numerically-lowest key (oldest by convention)
-    roleCache.erase(roleCache.begin());
+  if (roleCacheSize >= MAX_CACHE_ENTRIES) {
+    removeRoleCache(roleCacheKeys[0]);
     Serial.println(F("[CACHE] Evicted oldest entry (LRU cap)"));
   }
 }
@@ -1203,18 +1307,20 @@ void evictCacheIfFull() {
 void saveCache() {
   int addr = 0;
   EEPROM.write(addr++, EEPROM_MAGIC);
-  uint8_t cnt = (uint8_t)min((int)roleCache.size(), 20);  // cap at 20 in EEPROM
+  uint8_t cnt = (uint8_t)min((int)roleCacheSize, 20);  // cap at 20 in EEPROM
   EEPROM.write(addr++, cnt);
   int written = 0;
-  for (auto& kv : roleCache) {
+  for (int i = 0; i < roleCacheSize; i++) {
     if (written++ >= cnt || addr + MAX_NAME_LEN + 5 >= EEPROM_SIZE) break;
-    EEPROM.write(addr++, (kv.first >> 8) & 0xFF);
-    EEPROM.write(addr++, kv.first & 0xFF);
-    EEPROM.write(addr++, kv.second.role);
-    EEPROM.write(addr++, kv.second.isActive ? 1 : 0);
-    uint8_t nl = (uint8_t)strnlen(kv.second.name, MAX_NAME_LEN);
+    uint16_t id = roleCacheKeys[i];
+    CacheEntry& ce = roleCache[i];
+    EEPROM.write(addr++, (id >> 8) & 0xFF);
+    EEPROM.write(addr++, id & 0xFF);
+    EEPROM.write(addr++, ce.role);
+    EEPROM.write(addr++, ce.isActive ? 1 : 0);
+    uint8_t nl = (uint8_t)strnlen(ce.name, MAX_NAME_LEN);
     EEPROM.write(addr++, nl);
-    for (int i = 0; i < nl; i++) EEPROM.write(addr++, kv.second.name[i]);
+    for (int j = 0; j < nl; j++) EEPROM.write(addr++, ce.name[j]);
   }
   EEPROM.commit();
 }
@@ -1236,9 +1342,9 @@ void loadCache() {
     for (int j = 0; j < readLen && addr < EEPROM_SIZE; j++)
       e.name[j] = (char)EEPROM.read(addr++);
     if (nl > MAX_NAME_LEN) addr += (nl - MAX_NAME_LEN); // skip overflow bytes
-    roleCache[id] = e;
+    setRoleCache(id, e);
   }
-  Serial.printf("[CACHE] Loaded %d entries\n", (int)roleCache.size());
+  Serial.printf("[CACHE] Loaded %d entries\n", (int)roleCacheSize);
 }
 
 // ════════════════════════════════════════════════════════════════
